@@ -27,9 +27,9 @@ no position, a stale-revision response, or a structured safe error. The plugin
 uses the first position for this version. Both protocol sides validate
 revisions, bounds, page numbers, and finite coordinates.
 
-The dedicated Typst editor observes CodeMirror's `select.pointer` transactions.
-A click or mouse-driven selection change sends the saved selection head without
-requiring a modifier; keyboard-only selection changes intentionally do not sync.
+The dedicated Typst editor observes CodeMirror's user selection transactions.
+Pointer and keyboard selection changes send the saved selection head without
+requiring a modifier. Document edits and dirty buffers intentionally do not sync.
 Pointer bursts are coalesced for 75 ms and carry a latest-request generation
 through the asynchronous vault read and preview reveal, so an older cursor can
 never win by resolving later. Closing the originating editor invalidates both

@@ -194,14 +194,15 @@ and embeds the result in `main.js`; Community releases contain only `main.js`,
   Timeout or abort terminates the worker and its retained
   document; the next request starts a clean session. PDF bytes cross the WASM boundary directly as an `ArrayBuffer`; the worker
   transfers it without a renderer-side copy.
-- **Only the math face is embedded.** `helper/wasm/assets/NewCMMath-Book.otf` is
-  vendored from typst-assets under the GUST Font License and registered in
-  `InMemoryWorld::new`; `typst-kit` runs with `default-features = false`, so
-  `fonts::embedded()` is gone. Dropping it too fails every equation with
-  `no font could be found` — Typst treats that as a compile error, not a
-  fallback. Text faces come from those bounded sources — standard OS
-  directories, the Flatpak host mounts, and the directories the system's and the
-  user's fontconfig configuration declare. No user-typed font paths.
+- **Only the default text and math families are embedded.** Six Libertinus Serif
+  faces and `helper/wasm/assets/NewCMMath-Book.otf` are vendored from typst-assets
+  under their upstream licenses and registered in `InMemoryWorld::new` before
+  system fonts. `typst-kit` runs with `default-features = false`, so
+  `fonts::embedded()` cannot pull in the full upstream set. Dropping New Computer
+  Modern Math fails every equation with `no font could be found` — Typst treats
+  that as a compile error, not a fallback. Additional text faces come from the
+  bounded standard OS directories, Flatpak host mounts, and directories declared
+  by system and user fontconfig. No user-typed font paths.
 - **`@preview` packages resolve from local files only.** `src/typst-packages.ts`
   maps a `{namespace}/{name}/{version}/{path}` key onto Typst's own data and
   cache package directories and reads it through the same rooted reader the

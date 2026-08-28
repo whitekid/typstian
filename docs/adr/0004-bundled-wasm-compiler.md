@@ -47,9 +47,12 @@ root-relative paths, opens the canonical regular file, and rechecks its device a
 inode before returning bytes. Absolute paths, traversal, symlink escapes, package
 imports, and files exchanged after validation fail as missing files.
 
-Use the fonts embedded by `typst-kit` plus fonts installed in standard macOS,
-Windows, and Linux font directories. During worker initialization, the renderer
-enumerates font files and passes each to that session long enough to parse metadata;
+Bundle the six Libertinus Serif faces and New Computer Modern Math face vendored
+from `typst-assets` 0.15.1, then add fonts installed in standard macOS, Windows,
+and Linux font directories. `typst-kit` keeps its embedded-font feature disabled
+so the full upstream font set cannot enter the artifact accidentally. During
+worker initialization, the renderer enumerates system font files and passes each
+to that session long enough to parse metadata;
 registration does not retain the file bytes. During compilation, a `FontSource`
 records selected-font cache misses, and the same input-batch protocol asks an
 allowlisted asynchronous host reader for only those bytes. The worker keeps selected
@@ -81,7 +84,8 @@ another full PDF copy on the UI thread.
 - PDF output, diagnostics, imports, images, inverse search, and forward search
   use the retained Typst 0.15.1 document.
 - Typstian needs no helper executable, OS-specific build, or child process.
-- Version 0.0.1 uses embedded fonts plus fonts from standard system directories.
+- The bundled default Libertinus Serif and New Computer Modern Math faces work
+  without system fonts; additional faces come from bounded system directories.
 - The uncompressed WASM input is about 36 MiB; Brotli and base64 expand the
   production `main.js` to about 19 MiB.
 - A large compile consumes a worker thread but does not block Obsidian's renderer; terminating the worker also discards its retained document.

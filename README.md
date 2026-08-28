@@ -145,13 +145,14 @@ directory on each device works normally.
 
 ## Current scope
 
-Typstian does not provide mobile support, hover, rename, go-to-definition,
-formatting, semantic tokens, or Tinymist's custom preview protocol. Clicking a
+Typstian does not provide mobile support, rename, formatting, semantic tokens,
+or Tinymist's custom preview protocol. Clicking a
 rotated page does not jump to the source that produced it. Moving the cursor
 reveals the spot the surrounding source produced rather than the exact glyph
 under the cursor, and some cursor positions reveal nothing at all.
-Completion and PDF export are new and narrow: completions come from the last
-compiled snapshot, and the export writes one PDF beside the source on request.
+IDE reads and PDF export are narrow: completions, definitions, and hover tooltips
+use the last compiled snapshot, and the export writes one PDF beside the source
+on request.
 Syntax highlighting comes from the experimental `codemirror-lang-typst` 0.6.0 Lezer grammar for Typst 0.15.
 
 ## Contributing
