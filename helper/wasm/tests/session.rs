@@ -412,7 +412,6 @@ fn definition_in(
     })
 }
 
-
 fn tooltip_session(source: &str, revision: u64) -> Session {
     let mut session = Session::new();
     let compiled = session
@@ -653,7 +652,6 @@ fn finds_a_label_definition_from_the_retained_document() {
         }
     );
 }
-
 
 #[test]
 fn maps_same_file_definition_after_the_cursor_when_source_is_identical() {

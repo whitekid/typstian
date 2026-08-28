@@ -937,7 +937,6 @@ impl Session {
         }
     }
 
-
     pub fn tooltip(&self, request: TooltipRequest) -> TooltipResponse {
         let Some(revision) = self.revision else {
             return TooltipResponse::InvalidRequest {
@@ -979,13 +978,7 @@ impl Session {
             };
             mapping.snapshot_cursor
         };
-        let Some(result) = tooltip(
-            world,
-            Some(document),
-            &source,
-            tooltip_cursor,
-            side,
-        ) else {
+        let Some(result) = tooltip(world, Some(document), &source, tooltip_cursor, side) else {
             return TooltipResponse::NoTooltip { revision };
         };
         match result {

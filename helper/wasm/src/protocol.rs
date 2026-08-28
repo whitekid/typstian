@@ -41,7 +41,6 @@ pub struct DefinitionRequest {
     pub byte_offset: usize,
 }
 
-
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TooltipRequest {
@@ -153,27 +152,14 @@ pub enum DefinitionResponse {
     },
 }
 
-
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum TooltipResponse {
-    Text {
-        revision: u64,
-        content: String,
-    },
-    Code {
-        revision: u64,
-        content: String,
-    },
-    NoTooltip {
-        revision: u64,
-    },
-    InvalidRequest {
-        revision: u64,
-    },
-    StaleRevision {
-        expected: u64,
-    },
+    Text { revision: u64, content: String },
+    Code { revision: u64, content: String },
+    NoTooltip { revision: u64 },
+    InvalidRequest { revision: u64 },
+    StaleRevision { expected: u64 },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
