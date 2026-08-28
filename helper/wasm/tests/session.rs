@@ -697,7 +697,7 @@ fn maps_a_definition_cursor_through_text_typed_since_the_compile() {
 }
 
 #[test]
-fn drops_a_same_source_target_after_the_live_splice() {
+fn maps_a_same_source_target_after_the_live_splice() {
     let (session, text) = definition_session(26);
     let reference_end = text.find("@later").unwrap() + "@later".len();
     let mut live = text.clone();
@@ -705,7 +705,11 @@ fn drops_a_same_source_target_after_the_live_splice() {
 
     assert_eq!(
         definition_in(&session, 26, &live, reference_end + 1),
-        DefinitionResponse::NoDefinition { revision: 26 }
+        DefinitionResponse::Source {
+            revision: 26,
+            path: "main.typ".into(),
+            byte_offset: 174,
+        }
     );
 }
 

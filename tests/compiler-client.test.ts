@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   TypstianCompilerClient,
   type EngineCompileRequest,
+  type EngineCompleteRequest,
+  type EngineDefinitionRequest,
+  type EngineTooltipRequest,
   type WasmEngine,
   type WasmEngineFactory,
 } from "../src/compiler-client";
@@ -38,33 +41,16 @@ class FakeWasmEngine implements WasmEngine {
     return this.request("forward", payload);
   }
 
-  complete(payload: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-    explicit: boolean;
-  }): Promise<string> {
+  complete(payload: EngineCompleteRequest): Promise<string> {
     return this.request("complete", payload);
   }
 
-  definition(payload: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-  }): Promise<string> {
+  definition(payload: EngineDefinitionRequest): Promise<string> {
     return this.request("definition", payload);
   }
 
 
-  tooltip(payload: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-    side: -1 | 1;
-  }): Promise<string> {
+  tooltip(payload: EngineTooltipRequest): Promise<string> {
     return this.request("tooltip", payload);
   }
 

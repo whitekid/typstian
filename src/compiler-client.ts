@@ -1085,19 +1085,13 @@ export class TypstianCompilerClient {
   private callEngine(
     engine: WasmEngine,
     kind: RequestKind,
-    payload: Record<string, unknown>,
+    payload: unknown,
   ): Promise<unknown> {
     switch (kind) {
       case "environment":
         return engine.checkEnvironment();
       case "compile":
-        return engine.compile({
-          revision: payload.revision as number,
-          entryPath: payload.entryPath as string,
-          ...(payload.overlay === undefined
-            ? {}
-            : { overlay: payload.overlay as ReadonlyMap<string, Uint8Array> }),
-        });
+        return engine.compile(payload as EngineCompileRequest);
       case "jump":
         return engine.jump(
           payload as { revision: number; page: number; xPt: number; yPt: number },
@@ -1107,34 +1101,11 @@ export class TypstianCompilerClient {
           payload as { revision: number; source: string; byteOffset: number },
         );
       case "complete":
-        return engine.complete(
-          payload as {
-            revision: number;
-            source: string;
-            sourceText: string;
-            byteOffset: number;
-            explicit: boolean;
-          },
-        );
+        return engine.complete(payload as EngineCompleteRequest);
       case "definition":
-        return engine.definition(
-          payload as {
-            revision: number;
-            source: string;
-            sourceText: string;
-            byteOffset: number;
-          },
-        );
+        return engine.definition(payload as EngineDefinitionRequest);
       case "tooltip":
-        return engine.tooltip(
-          payload as {
-            revision: number;
-            source: string;
-            sourceText: string;
-            byteOffset: number;
-            side: -1 | 1;
-          },
-        );
+        return engine.tooltip(payload as EngineTooltipRequest);
     }
   }
 

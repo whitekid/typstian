@@ -52,6 +52,9 @@ export interface TypstPreviewViewOptions {
   requestSaveLayout: () => void;
 }
 
+const OPTIONAL_READ_KINDS = ["complete", "definition", "tooltip"] as const;
+type OptionalReadKind = (typeof OPTIONAL_READ_KINDS)[number];
+
 export class TypstPreviewView extends ItemView {
   private state: SerializedPreviewState = { sourcePath: null, zoom: 1, fit: false };
   private renderer: PreviewRenderer | null = null;
@@ -64,9 +67,11 @@ export class TypstPreviewView extends ItemView {
   private savingPdf: Promise<void> | null = null;
 
   private forwardAbort: AbortController | null = null;
-  private completeAbort: AbortController | null = null;
-  private definitionAbort: AbortController | null = null;
-  private tooltipAbort: AbortController | null = null;
+  private readonly optionalReadAborts: Record<OptionalReadKind, AbortController | null> = {
+    complete: null,
+    definition: null,
+    tooltip: null,
+  };
   private activeRender: Promise<void> = Promise.resolve();
   constructor(leaf: WorkspaceLeaf, private readonly options: TypstPreviewViewOptions) {
     super(leaf);
@@ -189,31 +194,22 @@ export class TypstPreviewView extends ItemView {
    * preview has nothing retained. A completion never starts a compile, so a
    * preview that has not produced a document yet simply offers nothing.
    */
-  async complete(
-    source: string,
-    sourceText: string,
-    byteOffset: number,
-    explicit: boolean,
-    isCurrent: () => boolean = () => true,
-  ): Promise<CompilerCompleteResult | null> {
+  private async optionalRead<T extends { revision: number }>(
+    kind: OptionalReadKind,
+    isCurrent: () => boolean,
+    read: (revision: number, signal: AbortSignal) => Promise<T>,
+  ): Promise<T | null> {
     const revision = this.activeRevision;
     if (revision === null || this.state.sourcePath === null || !isCurrent()) return null;
 
     const active = new AbortController();
-    this.completeAbort?.abort();
-    this.completeAbort = active;
+    this.optionalReadAborts[kind]?.abort();
+    this.optionalReadAborts[kind] = active;
     try {
-      const result = await this.options.complete({
-        revision,
-        source,
-        sourceText,
-        byteOffset,
-        explicit,
-        signal: active.signal,
-      });
+      const result = await read(revision, active.signal);
       if (
         active.signal.aborted
-        || this.completeAbort !== active
+        || this.optionalReadAborts[kind] !== active
         || result.revision !== revision
         || this.activeRevision !== revision
         || !isCurrent()
@@ -224,8 +220,31 @@ export class TypstPreviewView extends ItemView {
     } catch {
       return null;
     } finally {
-      if (this.completeAbort === active) this.completeAbort = null;
+      if (this.optionalReadAborts[kind] === active) {
+        this.optionalReadAborts[kind] = null;
+      }
     }
+  }
+
+  async complete(
+    source: string,
+    sourceText: string,
+    byteOffset: number,
+    explicit: boolean,
+    isCurrent: () => boolean = () => true,
+  ): Promise<CompilerCompleteResult | null> {
+    return this.optionalRead(
+      "complete",
+      isCurrent,
+      (revision, signal) => this.options.complete({
+        revision,
+        source,
+        sourceText,
+        byteOffset,
+        explicit,
+        signal,
+      }),
+    );
   }
 
 
@@ -236,35 +255,18 @@ export class TypstPreviewView extends ItemView {
     byteOffset: number,
     isCurrent: () => boolean = () => true,
   ): Promise<TypstSourceLocation | null> {
-    const revision = this.activeRevision;
-    if (revision === null || this.state.sourcePath === null || !isCurrent()) return null;
-
-    const active = new AbortController();
-    this.definitionAbort?.abort();
-    this.definitionAbort = active;
-    try {
-      const result = await this.options.definition({
+    const result = await this.optionalRead(
+      "definition",
+      isCurrent,
+      (revision, signal) => this.options.definition({
         revision,
         source,
         sourceText,
         byteOffset,
-        signal: active.signal,
-      });
-      if (
-        active.signal.aborted
-        || this.definitionAbort !== active
-        || result.revision !== revision
-        || this.activeRevision !== revision
-        || !isCurrent()
-      ) {
-        return null;
-      }
-      return result.location;
-    } catch {
-      return null;
-    } finally {
-      if (this.definitionAbort === active) this.definitionAbort = null;
-    }
+        signal,
+      }),
+    );
+    return result?.location ?? null;
   }
 
 
@@ -275,36 +277,19 @@ export class TypstPreviewView extends ItemView {
     side: -1 | 1,
     isCurrent: () => boolean = () => true,
   ): Promise<CompilerTooltipResult["tooltip"]> {
-    const revision = this.activeRevision;
-    if (revision === null || this.state.sourcePath === null || !isCurrent()) return null;
-
-    const active = new AbortController();
-    this.tooltipAbort?.abort();
-    this.tooltipAbort = active;
-    try {
-      const result = await this.options.tooltip({
+    const result = await this.optionalRead(
+      "tooltip",
+      isCurrent,
+      (revision, signal) => this.options.tooltip({
         revision,
         source,
         sourceText,
         byteOffset,
         side,
-        signal: active.signal,
-      });
-      if (
-        active.signal.aborted
-        || this.tooltipAbort !== active
-        || result.revision !== revision
-        || this.activeRevision !== revision
-        || !isCurrent()
-      ) {
-        return null;
-      }
-      return result.tooltip;
-    } catch {
-      return null;
-    } finally {
-      if (this.tooltipAbort === active) this.tooltipAbort = null;
-    }
+        signal,
+      }),
+    );
+    return result?.tooltip ?? null;
   }
 
   restartBackend(): void {
@@ -469,12 +454,10 @@ export class TypstPreviewView extends ItemView {
     this.jumpAbort = null;
     this.forwardAbort?.abort();
     this.forwardAbort = null;
-    this.completeAbort?.abort();
-    this.completeAbort = null;
-    this.definitionAbort?.abort();
-    this.definitionAbort = null;
-    this.tooltipAbort?.abort();
-    this.tooltipAbort = null;
+    for (const kind of OPTIONAL_READ_KINDS) {
+      this.optionalReadAborts[kind]?.abort();
+      this.optionalReadAborts[kind] = null;
+    }
   }
 
   /**

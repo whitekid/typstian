@@ -658,26 +658,37 @@ private handleVaultPath(vaultPath: string, includeDirectEntry = true): void {
    * compilation root, simply has nothing to offer — it must never provoke a
    * compile or a notice.
    */
-  private async handleCompletion(
+  private ideReadTarget(
     editor: TypstEditorView,
-    request: TypstCompletionRequest,
-    isCurrent: () => boolean
-  ): Promise<TypstCompletionResponse | null> {
-    if (!isCurrent() || editor.file?.path !== request.sourcePath) return null;
+    sourcePath: string,
+    isCurrent: () => boolean,
+  ): { preview: TypstPreviewView; compilerSource: string } | null {
+    if (!isCurrent() || editor.file?.path !== sourcePath) return null;
 
-    const preview = this.previewForSource(request.sourcePath);
+    const preview = this.previewForSource(sourcePath);
     if (preview === undefined || !isCurrent()) return null;
 
     const vaultRoot = this.vaultRoot();
     const compilerSource = resolveCompilerEntryPath(
       vaultRoot,
       this.compilationRoot(vaultRoot),
-      request.sourcePath
+      sourcePath,
     );
-    if (compilerSource === null || !isCurrent()) return null;
+    return compilerSource === null || !isCurrent()
+      ? null
+      : { preview, compilerSource };
+  }
 
-    const result = await preview.complete(
-      compilerSource,
+  private async handleCompletion(
+    editor: TypstEditorView,
+    request: TypstCompletionRequest,
+    isCurrent: () => boolean
+  ): Promise<TypstCompletionResponse | null> {
+    const target = this.ideReadTarget(editor, request.sourcePath, isCurrent);
+    if (target === null) return null;
+
+    const result = await target.preview.complete(
+      target.compilerSource,
       request.sourceText,
       request.byteOffset,
       request.explicit,
@@ -694,27 +705,12 @@ private handleVaultPath(vaultPath: string, includeDirectEntry = true): void {
     request: TypstTooltipRequest,
     isCurrent: () => boolean,
   ): Promise<TypstTooltipResponse | null> {
-    if (
-      !isCurrent()
-      || editor.file?.path !== request.sourcePath
-      || editor.getViewData() !== request.sourceText
-    ) {
-      return null;
-    }
+    if (editor.getViewData() !== request.sourceText) return null;
+    const target = this.ideReadTarget(editor, request.sourcePath, isCurrent);
+    if (target === null) return null;
 
-    const preview = this.previewForSource(request.sourcePath);
-    if (preview === undefined || !isCurrent()) return null;
-
-    const vaultRoot = this.vaultRoot();
-    const compilerSource = resolveCompilerEntryPath(
-      vaultRoot,
-      this.compilationRoot(vaultRoot),
-      request.sourcePath,
-    );
-    if (compilerSource === null || !isCurrent()) return null;
-
-    const result = await preview.tooltip(
-      compilerSource,
+    const result = await target.preview.tooltip(
+      target.compilerSource,
       request.sourceText,
       request.byteOffset,
       request.side,
@@ -729,27 +725,12 @@ private handleVaultPath(vaultPath: string, includeDirectEntry = true): void {
     request: TypstDefinitionRequest,
     isCurrent: () => boolean,
   ): Promise<void> {
-    if (
-      !isCurrent()
-      || editor.file?.path !== request.sourcePath
-      || editor.getViewData() !== request.sourceText
-    ) {
-      return;
-    }
+    if (editor.getViewData() !== request.sourceText) return;
+    const target = this.ideReadTarget(editor, request.sourcePath, isCurrent);
+    if (target === null) return;
 
-    const preview = this.previewForSource(request.sourcePath);
-    if (preview === undefined || !isCurrent()) return;
-
-    const vaultRoot = this.vaultRoot();
-    const compilerSource = resolveCompilerEntryPath(
-      vaultRoot,
-      this.compilationRoot(vaultRoot),
-      request.sourcePath,
-    );
-    if (compilerSource === null || !isCurrent()) return;
-
-    const location = await preview.definition(
-      compilerSource,
+    const location = await target.preview.definition(
+      target.compilerSource,
       request.sourceText,
       request.byteOffset,
       isCurrent,

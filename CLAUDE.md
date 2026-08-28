@@ -256,11 +256,11 @@ and embeds the result in `main.js`; Community releases contain only `main.js`,
   must never provoke a compile. Typst's `apply` strings are snippet syntax
   (`${name}`), which is also CodeMirror's, so they go through
   `snippetCompletion` unchanged.
-- **A malformed completion reply does not fail the session.** Every other
-  request kind hands a malformed or oversized reply to `failSession`, which
-  disposes the engine and terminates the worker — right for compile, jump, and
-  forward, because the preview is showing a document they could not validate.
-  A completion is an optional read, so `enqueue` refuses just that request.
+- **Malformed optional IDE replies do not fail the session.** Completion,
+  definition, and tooltip are optional reads, so `enqueue` refuses only the
+  malformed or oversized request. Compile, jump, and forward remain
+  session-fatal because the preview is showing a document they could not
+  validate.
 - `@codemirror/autocomplete` is pinned exactly, like `@codemirror/lint`: every
   6.x release so far depends on `@codemirror/view ^6.17.0`, which Obsidian's
   6.38.6 satisfies, so npm keeps one CodeMirror instance. Check that range

@@ -522,6 +522,8 @@ fn common_suffix(live: &str, snapshot: &str, prefix: usize) -> usize {
 struct CursorMapping {
     /// The cursor in snapshot coordinates.
     snapshot_cursor: usize,
+    /// The cursor in the requesting buffer's coordinates.
+    live_cursor: usize,
     /// Where the splice starts. Offsets up to here mean the same in both texts.
     prefix: usize,
 }
@@ -532,6 +534,7 @@ impl CursorMapping {
         if live == snapshot {
             return Some(Self {
                 snapshot_cursor: cursor,
+                live_cursor: cursor,
                 prefix: snapshot.len(),
             });
         }
@@ -543,15 +546,26 @@ impl CursorMapping {
         let snapshot_cursor = snapshot.len() - suffix;
         (snapshot_cursor >= prefix && snapshot.is_char_boundary(snapshot_cursor)).then_some(Self {
             snapshot_cursor,
+            live_cursor: cursor,
             prefix,
         })
     }
 
-    /// A snapshot offset in the requesting buffer's coordinates. An offset past
-    /// the splice start has no image: the text it named is exactly the text the
-    /// user has since replaced.
+    /// Maps a snapshot offset into the requesting buffer. The common prefix is
+    /// unchanged, and the common suffix moves by the splice length difference;
+    /// only offsets inside the replaced snapshot range have no honest image.
     fn to_live(&self, offset: usize) -> Option<usize> {
-        (offset <= self.prefix).then_some(offset)
+        if offset <= self.prefix {
+            return Some(offset);
+        }
+        if offset < self.snapshot_cursor {
+            return None;
+        }
+        if self.live_cursor >= self.snapshot_cursor {
+            offset.checked_add(self.live_cursor - self.snapshot_cursor)
+        } else {
+            offset.checked_sub(self.snapshot_cursor - self.live_cursor)
+        }
     }
 }
 
@@ -890,6 +904,11 @@ impl Session {
         ) else {
             return CompleteResponse::NoCompletions { revision };
         };
+        // Completion edits may only start in the shared prefix. A start in the
+        // suffix could make multiple earlier edits look like one cursor splice.
+        if offset > mapping.prefix {
+            return CompleteResponse::NoCompletions { revision };
+        }
         let Some(byte_offset) = mapping.to_live(offset) else {
             return CompleteResponse::NoCompletions { revision };
         };
@@ -1397,8 +1416,8 @@ mod cursor_mapping_tests {
         // A word starting at or before the splice names the same byte in both.
         assert_eq!(mapping.to_live(6), Some(6));
         assert_eq!(mapping.to_live(7), Some(7));
-        // Nothing after it does.
-        assert_eq!(mapping.to_live(8), None);
+        // The untouched suffix moves by the insertion delta.
+        assert_eq!(mapping.to_live(8), Some(10));
     }
 
     #[test]
@@ -1409,6 +1428,8 @@ mod cursor_mapping_tests {
         assert_eq!(mapping.to_live(7), Some(7));
         // The word started inside the text the user just deleted.
         assert_eq!(mapping.to_live(8), None);
+        // The untouched suffix moves back by the deletion delta.
+        assert_eq!(mapping.to_live(10), Some(8));
     }
 
     #[test]

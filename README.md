@@ -42,9 +42,8 @@ install it, and enable it. Do not enable another plugin that registers the
    the compiled PDF into the vault.
 5. Click rendered preview text to jump to the exact Typst source byte offset.
    Dragging still selects text for copying; links and controls keep their normal behavior.
-6. In a saved `.typ` editor, click or move the selection with the mouse to reveal
-   the matching spot in the preview. Keyboard-only selection
-   changes do not sync automatically. Unsaved buffers must be saved first.
+6. In a saved `.typ` editor, move the selection with the mouse or keyboard to
+   reveal the matching spot in the preview. Unsaved buffers must be saved first.
 
 The preview follows the active Typst editor, except that opening a source
 imported by the visible entry keeps that entry's preview. Compiler diagnostics are buttons;
@@ -80,18 +79,16 @@ is dropped and the newest text compiles as soon as the running compile finishes.
   the vault. A path that does not is still saved, so you can point it at a
   folder before creating it.
 
-Typstian embeds one font — New Computer Modern Math, Typst's default math face.
-Every text face comes from your system's standard macOS, Windows, or Linux font
-directories. The math face has to be embedded because operating systems do not
-ship one, and Typst fails an entire compile with `no font could be found` when
-an equation cannot be typeset; text has a usable fallback everywhere. Typstian
-registers shared font metadata once, then loads only the fonts a document
-selects into WASM on demand. It does not accept additional font paths or
-compiler flags.
+Typstian embeds six Libertinus Serif faces — regular, italic, bold, bold
+italic, semibold, and semibold italic — plus New Computer Modern Math for
+equations. A document that does not set `#set text(font: ...)` therefore uses
+the bundled Libertinus family without relying on an installed text font.
 
-If a document looks wrong, install the family it asks for — a `.typ` file that
-does not set `#set text(font: ...)` falls back to whatever your system offers
-rather than to Typst's bundled Libertinus Serif.
+Additional faces come from your system's standard macOS, Windows, or Linux font
+directories. Typstian registers shared font metadata once, then loads only the
+fonts a document selects into WASM on demand. If a document requests another
+family, install that family on the system. Typstian does not accept additional
+font paths or compiler flags.
 
 ## Troubleshooting
 
