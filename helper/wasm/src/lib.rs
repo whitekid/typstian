@@ -573,6 +573,18 @@ fn completion_kind(kind: &CompletionKind) -> &'static str {
     }
 }
 
+struct IdeContext<'a> {
+    revision: u64,
+    world: &'a InMemoryWorld,
+    document: &'a PagedDocument,
+    source: Source,
+}
+
+enum IdeContextError {
+    InvalidRequest { revision: u64 },
+    StaleRevision { expected: u64 },
+}
+
 #[derive(Default)]
 pub struct Session {
     revision: Option<u64>,
@@ -803,27 +815,62 @@ impl Session {
         world.source(id).ok()
     }
 
-    pub fn complete(&self, request: CompleteRequest) -> CompleteResponse {
+    fn ide_context<'a>(
+        &'a self,
+        request_revision: u64,
+        source_path: &str,
+        source_text: &str,
+        byte_offset: usize,
+    ) -> Result<IdeContext<'a>, IdeContextError> {
         let Some(revision) = self.revision else {
-            return CompleteResponse::InvalidRequest {
-                revision: request.revision,
-            };
+            return Err(IdeContextError::InvalidRequest {
+                revision: request_revision,
+            });
         };
-        if request.revision != revision {
-            return CompleteResponse::StaleRevision { expected: revision };
+        if request_revision != revision {
+            return Err(IdeContextError::StaleRevision { expected: revision });
         }
         let (Some(world), Some(document)) = (self.world.as_ref(), self.document.as_ref()) else {
-            return CompleteResponse::InvalidRequest { revision };
+            return Err(IdeContextError::InvalidRequest { revision });
         };
-        if request.source_text.len() > MAX_COMPLETION_SOURCE_BYTES
-            || request.byte_offset > request.source_text.len()
-            || !request.source_text.is_char_boundary(request.byte_offset)
+        if source_text.len() > MAX_COMPLETION_SOURCE_BYTES
+            || byte_offset > source_text.len()
+            || !source_text.is_char_boundary(byte_offset)
         {
-            return CompleteResponse::InvalidRequest { revision };
+            return Err(IdeContextError::InvalidRequest { revision });
         }
-        let Some(source) = Self::retained_source(world, &request.source) else {
-            return CompleteResponse::InvalidRequest { revision };
+        let Some(source) = Self::retained_source(world, source_path) else {
+            return Err(IdeContextError::InvalidRequest { revision });
         };
+        Ok(IdeContext {
+            revision,
+            world,
+            document,
+            source,
+        })
+    }
+
+    pub fn complete(&self, request: CompleteRequest) -> CompleteResponse {
+        let context = match self.ide_context(
+            request.revision,
+            &request.source,
+            &request.source_text,
+            request.byte_offset,
+        ) {
+            Ok(context) => context,
+            Err(IdeContextError::InvalidRequest { revision }) => {
+                return CompleteResponse::InvalidRequest { revision };
+            }
+            Err(IdeContextError::StaleRevision { expected }) => {
+                return CompleteResponse::StaleRevision { expected };
+            }
+        };
+        let IdeContext {
+            revision,
+            world,
+            document,
+            source,
+        } = context;
         // The cursor belongs to the buffer the user is typing in; the retained
         // snapshot may be a few keystrokes behind it.
         let Some(mapping) =
@@ -866,26 +913,26 @@ impl Session {
     }
 
     pub fn definition(&self, request: DefinitionRequest) -> DefinitionResponse {
-        let Some(revision) = self.revision else {
-            return DefinitionResponse::InvalidRequest {
-                revision: request.revision,
-            };
+        let context = match self.ide_context(
+            request.revision,
+            &request.source,
+            &request.source_text,
+            request.byte_offset,
+        ) {
+            Ok(context) => context,
+            Err(IdeContextError::InvalidRequest { revision }) => {
+                return DefinitionResponse::InvalidRequest { revision };
+            }
+            Err(IdeContextError::StaleRevision { expected }) => {
+                return DefinitionResponse::StaleRevision { expected };
+            }
         };
-        if request.revision != revision {
-            return DefinitionResponse::StaleRevision { expected: revision };
-        }
-        let (Some(world), Some(document)) = (self.world.as_ref(), self.document.as_ref()) else {
-            return DefinitionResponse::InvalidRequest { revision };
-        };
-        if request.source_text.len() > MAX_COMPLETION_SOURCE_BYTES
-            || request.byte_offset > request.source_text.len()
-            || !request.source_text.is_char_boundary(request.byte_offset)
-        {
-            return DefinitionResponse::InvalidRequest { revision };
-        }
-        let Some(source) = Self::retained_source(world, &request.source) else {
-            return DefinitionResponse::InvalidRequest { revision };
-        };
+        let IdeContext {
+            revision,
+            world,
+            document,
+            source,
+        } = context;
         let Some(mapping) =
             CursorMapping::resolve(&request.source_text, source.text(), request.byte_offset)
         else {
@@ -938,30 +985,30 @@ impl Session {
     }
 
     pub fn tooltip(&self, request: TooltipRequest) -> TooltipResponse {
-        let Some(revision) = self.revision else {
-            return TooltipResponse::InvalidRequest {
-                revision: request.revision,
-            };
+        let context = match self.ide_context(
+            request.revision,
+            &request.source,
+            &request.source_text,
+            request.byte_offset,
+        ) {
+            Ok(context) => context,
+            Err(IdeContextError::InvalidRequest { revision }) => {
+                return TooltipResponse::InvalidRequest { revision };
+            }
+            Err(IdeContextError::StaleRevision { expected }) => {
+                return TooltipResponse::StaleRevision { expected };
+            }
         };
-        if request.revision != revision {
-            return TooltipResponse::StaleRevision { expected: revision };
-        }
-        let (Some(world), Some(document)) = (self.world.as_ref(), self.document.as_ref()) else {
-            return TooltipResponse::InvalidRequest { revision };
-        };
-        if request.source_text.len() > MAX_COMPLETION_SOURCE_BYTES
-            || request.byte_offset > request.source_text.len()
-            || !request.source_text.is_char_boundary(request.byte_offset)
-        {
-            return TooltipResponse::InvalidRequest { revision };
-        }
+        let IdeContext {
+            revision,
+            world,
+            document,
+            source,
+        } = context;
         let side = match request.side {
             -1 => Side::Before,
             1 => Side::After,
             _ => return TooltipResponse::InvalidRequest { revision },
-        };
-        let Some(source) = Self::retained_source(world, &request.source) else {
-            return TooltipResponse::InvalidRequest { revision };
         };
         let tooltip_cursor = if request.source_text == source.text() {
             request.byte_offset

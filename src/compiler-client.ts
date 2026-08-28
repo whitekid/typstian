@@ -50,32 +50,36 @@ export interface WasmEngineFactoryOptions {
   maxOutputBytes: number;
 }
 
+export interface EngineIdeRequest {
+  revision: number;
+  source: string;
+  /**
+   * The buffer the cursor belongs to. The compiler reconciles it against the
+   * snapshot retained by the active preview.
+   */
+  sourceText: string;
+  byteOffset: number;
+}
+
+export interface EngineCompleteRequest extends EngineIdeRequest {
+  explicit: boolean;
+}
+
+export type EngineDefinitionRequest = EngineIdeRequest;
+
+export interface EngineTooltipRequest extends EngineIdeRequest {
+  side: -1 | 1;
+}
+
 export interface WasmEngine {
   ready(): Promise<void>;
   checkEnvironment(): Promise<string>;
   compile(request: EngineCompileRequest): Promise<unknown>;
   jump(request: { revision: number; page: number; xPt: number; yPt: number }): Promise<string>;
   forward(request: { revision: number; source: string; byteOffset: number }): Promise<string>;
-  complete(request: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-    explicit: boolean;
-  }): Promise<string>;
-  definition(request: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-  }): Promise<string>;
-  tooltip(request: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-    side: -1 | 1;
-  }): Promise<string>;
+  complete(request: EngineCompleteRequest): Promise<string>;
+  definition(request: EngineDefinitionRequest): Promise<string>;
+  tooltip(request: EngineTooltipRequest): Promise<string>;
   dispose(): void;
 }
 
@@ -179,18 +183,7 @@ export interface CompilerForwardResult {
   positions: CompilerForwardPosition[];
 }
 
-export interface CompilerCompleteRequest {
-  revision: number;
-  source: string;
-  /**
-   * The buffer the cursor belongs to. The compiler reconciles it against the
-   * snapshot it retained, so the cursor keeps its meaning across the keystrokes
-   * that landed since the last compile.
-   */
-  sourceText: string;
-  byteOffset: number;
-  /** Whether the user asked for completions outright rather than by typing. */
-  explicit: boolean;
+export interface CompilerCompleteRequest extends EngineCompleteRequest {
   signal?: AbortSignal;
 }
 
@@ -209,11 +202,7 @@ export interface CompilerCompleteResult {
   completions: CompilerCompletion[];
 }
 
-export interface CompilerDefinitionRequest {
-  revision: number;
-  source: string;
-  sourceText: string;
-  byteOffset: number;
+export interface CompilerDefinitionRequest extends EngineDefinitionRequest {
   signal?: AbortSignal;
 }
 
@@ -223,12 +212,7 @@ export interface CompilerDefinitionResult {
 }
 
 
-export interface CompilerTooltipRequest {
-  revision: number;
-  source: string;
-  sourceText: string;
-  byteOffset: number;
-  side: -1 | 1;
+export interface CompilerTooltipRequest extends EngineTooltipRequest {
   signal?: AbortSignal;
 }
 
@@ -788,25 +772,59 @@ export class TypstianCompilerClient {
    * and `forward` it answers from the snapshot the visible PDF came from, so it
    * never starts a compile of its own.
    */
-  complete(request: CompilerCompleteRequest): Promise<CompilerCompleteResult> {
+  private ideRequestError(
+    request: EngineIdeRequest & { side?: unknown },
+    messages: {
+      sourceLabel: string;
+      byteOffsetInvalid: string;
+      sourceTooLarge: string;
+      requestInvalid: string;
+      sideInvalid?: string;
+    },
+  ): CompilerClientError | null {
     try {
       validateRevision(request.revision);
-      validateVaultPath(request.source, "Completion source");
+      validateVaultPath(request.source, messages.sourceLabel);
       if (!Number.isSafeInteger(request.byteOffset) || request.byteOffset < 0) {
-        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.completionByteOffsetInvalid);
+        throw new CompilerClientError("invalid-input", messages.byteOffsetInvalid);
+      }
+      if (
+        messages.sideInvalid !== undefined
+        && request.side !== -1
+        && request.side !== 1
+      ) {
+        throw new CompilerClientError("invalid-input", messages.sideInvalid);
       }
       if (
         typeof request.sourceText !== "string"
         || Buffer.byteLength(request.sourceText) > this.maxCompletionBytes
       ) {
-        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.completionSourceTooLarge);
+        throw new CompilerClientError("invalid-input", messages.sourceTooLarge);
       }
     } catch (error) {
-      return Promise.reject(asClientError(error, "invalid-input", COMPILER_CLIENT_ERROR.completionRequestInvalid));
+      return asClientError(
+        error,
+        "invalid-input",
+        messages.requestInvalid,
+      );
     }
     if (request.revision !== this.latestDocumentRevision) {
-      return Promise.reject(new CompilerClientError("stale", COMPILER_CLIENT_ERROR.previewRevisionInactive));
+      return new CompilerClientError(
+        "stale",
+        COMPILER_CLIENT_ERROR.previewRevisionInactive,
+      );
     }
+    return null;
+  }
+
+  complete(request: CompilerCompleteRequest): Promise<CompilerCompleteResult> {
+    const error = this.ideRequestError(request, {
+      sourceLabel: "Completion source",
+      byteOffsetInvalid: COMPILER_CLIENT_ERROR.completionByteOffsetInvalid,
+      sourceTooLarge: COMPILER_CLIENT_ERROR.completionSourceTooLarge,
+      requestInvalid: COMPILER_CLIENT_ERROR.completionRequestInvalid,
+    });
+    if (error !== null) return Promise.reject(error);
     return this.enqueue(
       "complete",
       {
@@ -823,24 +841,13 @@ export class TypstianCompilerClient {
 
 
   definition(request: CompilerDefinitionRequest): Promise<CompilerDefinitionResult> {
-    try {
-      validateRevision(request.revision);
-      validateVaultPath(request.source, "Definition source");
-      if (!Number.isSafeInteger(request.byteOffset) || request.byteOffset < 0) {
-        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.definitionByteOffsetInvalid);
-      }
-      if (
-        typeof request.sourceText !== "string"
-        || Buffer.byteLength(request.sourceText) > this.maxCompletionBytes
-      ) {
-        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.definitionSourceTooLarge);
-      }
-    } catch (error) {
-      return Promise.reject(asClientError(error, "invalid-input", COMPILER_CLIENT_ERROR.definitionRequestInvalid));
-    }
-    if (request.revision !== this.latestDocumentRevision) {
-      return Promise.reject(new CompilerClientError("stale", COMPILER_CLIENT_ERROR.previewRevisionInactive));
-    }
+    const error = this.ideRequestError(request, {
+      sourceLabel: "Definition source",
+      byteOffsetInvalid: COMPILER_CLIENT_ERROR.definitionByteOffsetInvalid,
+      sourceTooLarge: COMPILER_CLIENT_ERROR.definitionSourceTooLarge,
+      requestInvalid: COMPILER_CLIENT_ERROR.definitionRequestInvalid,
+    });
+    if (error !== null) return Promise.reject(error);
     return this.enqueue(
       "definition",
       {
@@ -856,27 +863,14 @@ export class TypstianCompilerClient {
 
 
   tooltip(request: CompilerTooltipRequest): Promise<CompilerTooltipResult> {
-    try {
-      validateRevision(request.revision);
-      validateVaultPath(request.source, "Tooltip source");
-      if (!Number.isSafeInteger(request.byteOffset) || request.byteOffset < 0) {
-        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.tooltipByteOffsetInvalid);
-      }
-      if (request.side !== -1 && request.side !== 1) {
-        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.tooltipSideInvalid);
-      }
-      if (
-        typeof request.sourceText !== "string"
-        || Buffer.byteLength(request.sourceText) > this.maxCompletionBytes
-      ) {
-        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.tooltipSourceTooLarge);
-      }
-    } catch (error) {
-      return Promise.reject(asClientError(error, "invalid-input", COMPILER_CLIENT_ERROR.tooltipRequestInvalid));
-    }
-    if (request.revision !== this.latestDocumentRevision) {
-      return Promise.reject(new CompilerClientError("stale", COMPILER_CLIENT_ERROR.previewRevisionInactive));
-    }
+    const error = this.ideRequestError(request, {
+      sourceLabel: "Tooltip source",
+      byteOffsetInvalid: COMPILER_CLIENT_ERROR.tooltipByteOffsetInvalid,
+      sideInvalid: COMPILER_CLIENT_ERROR.tooltipSideInvalid,
+      sourceTooLarge: COMPILER_CLIENT_ERROR.tooltipSourceTooLarge,
+      requestInvalid: COMPILER_CLIENT_ERROR.tooltipRequestInvalid,
+    });
+    if (error !== null) return Promise.reject(error);
     return this.enqueue(
       "tooltip",
       {

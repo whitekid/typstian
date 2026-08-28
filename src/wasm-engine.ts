@@ -7,6 +7,9 @@ import init, {
 } from "../helper/wasm/pkg/typstian_wasm.js";
 import type {
   EngineCompileRequest,
+  EngineCompleteRequest,
+  EngineDefinitionRequest,
+  EngineTooltipRequest,
   WasmEngine,
   WasmEngineFactoryOptions,
 } from "./compiler-client";
@@ -146,34 +149,17 @@ class InlineWasmEngine implements WasmEngine {
     return (await this.requireSession()).forward(JSON.stringify(request));
   }
 
-  async complete(request: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-    explicit: boolean;
-  }): Promise<string> {
+  async complete(request: EngineCompleteRequest): Promise<string> {
     return (await this.requireSession()).complete(JSON.stringify(request));
   }
 
 
-  async definition(request: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-  }): Promise<string> {
+  async definition(request: EngineDefinitionRequest): Promise<string> {
     return (await this.requireSession()).definition(JSON.stringify(request));
   }
 
 
-  async tooltip(request: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-    side: -1 | 1;
-  }): Promise<string> {
+  async tooltip(request: EngineTooltipRequest): Promise<string> {
     return (await this.requireSession()).tooltip(JSON.stringify(request));
   }
 
@@ -294,36 +280,19 @@ class WorkerWasmEngine implements WasmEngine {
     return this.request<string>("forward", request);
   }
 
-  async complete(request: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-    explicit: boolean;
-  }): Promise<string> {
+  async complete(request: EngineCompleteRequest): Promise<string> {
     await this.initialization;
     return this.request<string>("complete", request);
   }
 
 
-  async definition(request: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-  }): Promise<string> {
+  async definition(request: EngineDefinitionRequest): Promise<string> {
     await this.initialization;
     return this.request<string>("definition", request);
   }
 
 
-  async tooltip(request: {
-    revision: number;
-    source: string;
-    sourceText: string;
-    byteOffset: number;
-    side: -1 | 1;
-  }): Promise<string> {
+  async tooltip(request: EngineTooltipRequest): Promise<string> {
     await this.initialization;
     return this.request<string>("tooltip", request);
   }
