@@ -6,6 +6,8 @@ import {
   type CompilerDiagnostic,
   type CompilerCompleteRequest,
   type CompilerCompleteResult,
+  type CompilerDefinitionRequest,
+  type CompilerDefinitionResult,
   type CompilerForwardRequest,
   type CompilerForwardResult,
   type CompilerJumpRequest,
@@ -33,6 +35,7 @@ export interface TypstPreviewViewOptions {
   jump: (request: CompilerJumpRequest) => Promise<CompilerJumpResult>;
   forward: (request: CompilerForwardRequest) => Promise<CompilerForwardResult>;
   complete: (request: CompilerCompleteRequest) => Promise<CompilerCompleteResult>;
+  definition: (request: CompilerDefinitionRequest) => Promise<CompilerDefinitionResult>;
   onCompiled: (sourcePath: string, result: CompilerCompileResult) => void;
   onDiagnostic: (diagnostic: CompilerDiagnostic) => void;
   onSourceLocation: (
@@ -59,6 +62,7 @@ export class TypstPreviewView extends ItemView {
 
   private forwardAbort: AbortController | null = null;
   private completeAbort: AbortController | null = null;
+  private definitionAbort: AbortController | null = null;
   private activeRender: Promise<void> = Promise.resolve();
   constructor(leaf: WorkspaceLeaf, private readonly options: TypstPreviewViewOptions) {
     super(leaf);
@@ -217,6 +221,45 @@ export class TypstPreviewView extends ItemView {
       return null;
     } finally {
       if (this.completeAbort === active) this.completeAbort = null;
+    }
+  }
+
+
+  /** A source target from the retained document, or null when none remains current. */
+  async definition(
+    source: string,
+    sourceText: string,
+    byteOffset: number,
+    isCurrent: () => boolean = () => true,
+  ): Promise<TypstSourceLocation | null> {
+    const revision = this.activeRevision;
+    if (revision === null || this.state.sourcePath === null || !isCurrent()) return null;
+
+    const active = new AbortController();
+    this.definitionAbort?.abort();
+    this.definitionAbort = active;
+    try {
+      const result = await this.options.definition({
+        revision,
+        source,
+        sourceText,
+        byteOffset,
+        signal: active.signal,
+      });
+      if (
+        active.signal.aborted
+        || this.definitionAbort !== active
+        || result.revision !== revision
+        || this.activeRevision !== revision
+        || !isCurrent()
+      ) {
+        return null;
+      }
+      return result.location;
+    } catch {
+      return null;
+    } finally {
+      if (this.definitionAbort === active) this.definitionAbort = null;
     }
   }
 
@@ -384,6 +427,8 @@ export class TypstPreviewView extends ItemView {
     this.forwardAbort = null;
     this.completeAbort?.abort();
     this.completeAbort = null;
+    this.definitionAbort?.abort();
+    this.definitionAbort = null;
   }
 
   /**

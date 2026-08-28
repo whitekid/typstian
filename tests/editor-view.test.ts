@@ -50,6 +50,78 @@ describe("TypstEditorView", () => {
     expect(view.getDisplayText()).toBe("Typst editor");
   });
 
+  it("requests go to definition at the current UTF-8 cursor", async () => {
+    const onDefinition = vi.fn().mockResolvedValue(undefined);
+    const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+    const view = new TypstEditorView(leaf, { onDefinition });
+    document.body.appendChild(view.contentEl);
+    view.file = { path: "book/main.typ", extension: "typ" } as never;
+    view.setViewData("café #x", true);
+    view.editorView.dispatch({ selection: { anchor: 7 } });
+
+    await view.goToDefinition();
+
+    expect(onDefinition).toHaveBeenCalledWith({
+      sourcePath: "book/main.typ",
+      sourceText: "café #x",
+      byteOffset: 8,
+    });
+    await view.onClose();
+  });
+
+  it("uses Meta-click on macOS and Control-click on other platforms", async () => {
+    const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+    const macDefinition = vi.fn().mockResolvedValue(undefined);
+    const mac = new TypstEditorView(leaf, { onDefinition: macDefinition, isMacOS: true });
+    document.body.appendChild(mac.contentEl);
+    mac.file = { path: "book/main.typ", extension: "typ" } as never;
+    mac.setViewData("café #x", true);
+    vi.spyOn(mac.editorView, "posAtCoords").mockReturnValue(7);
+
+    mac.editorView.contentDOM.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ctrlKey: true,
+      clientX: 10,
+      clientY: 10,
+    }));
+    expect(macDefinition).not.toHaveBeenCalled();
+    mac.editorView.contentDOM.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      metaKey: true,
+      clientX: 10,
+      clientY: 10,
+    }));
+    await vi.waitFor(() => expect(macDefinition).toHaveBeenCalledOnce());
+
+    const otherDefinition = vi.fn().mockResolvedValue(undefined);
+    const other = new TypstEditorView(leaf, { onDefinition: otherDefinition, isMacOS: false });
+    document.body.appendChild(other.contentEl);
+    other.file = { path: "book/main.typ", extension: "typ" } as never;
+    other.setViewData("café #x", true);
+    vi.spyOn(other.editorView, "posAtCoords").mockReturnValue(7);
+    other.editorView.contentDOM.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ctrlKey: true,
+      clientX: 10,
+      clientY: 10,
+    }));
+    await vi.waitFor(() => expect(otherDefinition).toHaveBeenCalledOnce());
+    expect(otherDefinition).toHaveBeenCalledWith({
+      sourcePath: "book/main.typ",
+      sourceText: "café #x",
+      byteOffset: 8,
+    });
+
+    await mac.onClose();
+    await other.onClose();
+  });
+
   it("loads and returns view data without scheduling a recursive save", () => {
     const { view, onDirty } = createView();
     const requestSave = vi.spyOn(view, "requestSave");

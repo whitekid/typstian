@@ -8,6 +8,7 @@ export class TypstianWasmSession {
     [Symbol.dispose](): void;
     compile(request_json: string, read_file: WasmInputReader, read_package: WasmInputReader, read_font: WasmInputReader): unknown;
     complete(request_json: string): string;
+    definition(request_json: string): string;
     environment(): string;
     forward(request_json: string): string;
     jump(request_json: string): string;
@@ -22,6 +23,7 @@ export interface InitOutput {
     readonly __wbg_typstianwasmsession_free: (a: number, b: number) => void;
     readonly typstianwasmsession_compile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly typstianwasmsession_complete: (a: number, b: number, c: number, d: number) => void;
+    readonly typstianwasmsession_definition: (a: number, b: number, c: number, d: number) => void;
     readonly typstianwasmsession_environment: (a: number, b: number) => void;
     readonly typstianwasmsession_forward: (a: number, b: number, c: number, d: number) => void;
     readonly typstianwasmsession_jump: (a: number, b: number, c: number, d: number) => void;

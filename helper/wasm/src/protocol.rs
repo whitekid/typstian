@@ -32,6 +32,15 @@ pub struct CompleteRequest {
     pub explicit: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DefinitionRequest {
+    pub revision: u64,
+    pub source: String,
+    pub source_text: String,
+    pub byte_offset: usize,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletionItem {
@@ -101,6 +110,26 @@ pub enum CompleteResponse {
         completions: Vec<CompletionItem>,
     },
     NoCompletions {
+        revision: u64,
+    },
+    InvalidRequest {
+        revision: u64,
+    },
+    StaleRevision {
+        expected: u64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum DefinitionResponse {
+    Source {
+        revision: u64,
+        path: String,
+        #[serde(rename = "byteOffset")]
+        byte_offset: usize,
+    },
+    NoDefinition {
         revision: u64,
     },
     InvalidRequest {

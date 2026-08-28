@@ -1,7 +1,7 @@
 import { requestDeadlineMs } from "./compile-deadline";
 import { COMPILER_CLIENT_ERROR } from "./messages";
 
-const PROTOCOL_VERSION = 5;
+const PROTOCOL_VERSION = 6;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_INITIALIZATION_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 70 * 1024 * 1024;
@@ -61,6 +61,12 @@ export interface WasmEngine {
     byteOffset: number;
     explicit: boolean;
   }): Promise<string>;
+  definition(request: {
+    revision: number;
+    source: string;
+    sourceText: string;
+    byteOffset: number;
+  }): Promise<string>;
   dispose(): void;
 }
 
@@ -81,7 +87,7 @@ export interface TypstianCompilerClientOptions {
 }
 
 export interface CompilerEnvironment {
-  protocolVersion: 5;
+  protocolVersion: 6;
   typstVersion: string;
 }
 
@@ -194,7 +200,26 @@ export interface CompilerCompleteResult {
   completions: CompilerCompletion[];
 }
 
-export type RequestKind = "environment" | "compile" | "jump" | "forward" | "complete";
+export interface CompilerDefinitionRequest {
+  revision: number;
+  source: string;
+  sourceText: string;
+  byteOffset: number;
+  signal?: AbortSignal;
+}
+
+export interface CompilerDefinitionResult {
+  revision: number;
+  location: { path: string; byteOffset: number } | null;
+}
+
+export type RequestKind =
+  | "environment"
+  | "compile"
+  | "jump"
+  | "forward"
+  | "complete"
+  | "definition";
 
 interface PendingRequest<T = unknown> {
   kind: RequestKind;
@@ -515,6 +540,30 @@ function parseComplete(
   };
 }
 
+
+function parseDefinition(value: unknown, revision: number): CompilerDefinitionResult {
+  const response = requireRecord(value, "definition response");
+  if (response.type === "error") throw transportError(parseError(response, "definition", revision));
+  if (response.type === "stale-revision") {
+    requireInteger(response.expectedRevision, "expected revision");
+    throw new CompilerClientError("stale", COMPILER_CLIENT_ERROR.previewRevisionInactive);
+  }
+  if (response.revision !== revision) {
+    throw malformed(COMPILER_CLIENT_ERROR.wrongDefinitionRevision);
+  }
+  if (response.type === "no-definition") return { revision, location: null };
+  if (response.type !== "source") {
+    throw malformed(COMPILER_CLIENT_ERROR.wrongDefinitionResponse);
+  }
+  return {
+    revision,
+    location: {
+      path: requireVaultPath(response.path, "definition path"),
+      byteOffset: requireInteger(response.byteOffset, "definition byte offset"),
+    },
+  };
+}
+
 function requirePositiveOption(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.positiveInteger(label));
@@ -722,6 +771,39 @@ export class TypstianCompilerClient {
     );
   }
 
+
+  definition(request: CompilerDefinitionRequest): Promise<CompilerDefinitionResult> {
+    try {
+      validateRevision(request.revision);
+      validateVaultPath(request.source, "Definition source");
+      if (!Number.isSafeInteger(request.byteOffset) || request.byteOffset < 0) {
+        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.definitionByteOffsetInvalid);
+      }
+      if (
+        typeof request.sourceText !== "string"
+        || Buffer.byteLength(request.sourceText) > this.maxCompletionBytes
+      ) {
+        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.definitionSourceTooLarge);
+      }
+    } catch (error) {
+      return Promise.reject(asClientError(error, "invalid-input", COMPILER_CLIENT_ERROR.definitionRequestInvalid));
+    }
+    if (request.revision !== this.latestDocumentRevision) {
+      return Promise.reject(new CompilerClientError("stale", COMPILER_CLIENT_ERROR.previewRevisionInactive));
+    }
+    return this.enqueue(
+      "definition",
+      {
+        revision: request.revision,
+        source: request.source,
+        sourceText: request.sourceText,
+        byteOffset: request.byteOffset,
+      },
+      (response) => parseDefinition(response, request.revision),
+      request.signal,
+    );
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -746,7 +828,9 @@ export class TypstianCompilerClient {
     }
 
     const encodedRequest = JSON.stringify(payload);
-    const requestLimit = kind === "complete" ? this.maxCompletionBytes : this.maxRequestBytes;
+    const requestLimit = kind === "complete" || kind === "definition"
+      ? this.maxCompletionBytes
+      : this.maxRequestBytes;
     if (Buffer.byteLength(encodedRequest) > requestLimit) {
       return Promise.reject(new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.requestTooLarge));
     }
@@ -830,12 +914,13 @@ export class TypstianCompilerClient {
               error instanceof CompilerClientError
                 ? error
                 : malformed(COMPILER_CLIENT_ERROR.malformedResponse);
-            // A completion is an optional read of retained state: refusing the
-            // one bad reply is enough. Compile, jump, and forward still fail the
+            // Optional IDE reads only observe retained state: refusing one bad
+            // reply is enough. Compile, jump, and forward still fail the
             // whole session, because a document they cannot trust is one the
             // preview is already showing.
             if (
               kind !== "complete"
+              && kind !== "definition"
               && (clientError.code === "malformed-protocol"
                 || clientError.code === "output-limit")
             ) {
@@ -947,6 +1032,15 @@ export class TypstianCompilerClient {
             sourceText: string;
             byteOffset: number;
             explicit: boolean;
+          },
+        );
+      case "definition":
+        return engine.definition(
+          payload as {
+            revision: number;
+            source: string;
+            sourceText: string;
+            byteOffset: number;
           },
         );
     }

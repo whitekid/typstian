@@ -11,11 +11,14 @@ use typst::foundations::{Bytes, Datetime, Duration};
 use typst::introspection::PagedPosition;
 use typst::layout::{Abs, Point};
 use typst::syntax::package::PackageSpec;
-use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
+use typst::syntax::{FileId, RootedPath, Side, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook, FontInfo};
 use typst::utils::LazyHash;
 use typst::{LibraryExt, World, WorldExt};
-use typst_ide::{CompletionKind, IdeWorld, Jump, autocomplete, jump_from_click, jump_from_cursor};
+use typst_ide::{
+    CompletionKind, Definition, IdeWorld, Jump, autocomplete, definition, jump_from_click,
+    jump_from_cursor,
+};
 use typst_kit::fonts::{FontSource, FontStore};
 use typst_layout::PagedDocument;
 use typst_pdf::PdfOptions;
@@ -25,8 +28,9 @@ use wasm_bindgen::prelude::*;
 pub mod protocol;
 
 use protocol::{
-    ClickRequest, ClickResponse, CompleteRequest, CompleteResponse, CompletionItem, Diagnostic,
-    ForwardRequest, ForwardResponse, PageDimensions, RenderedPosition,
+    ClickRequest, ClickResponse, CompleteRequest, CompleteResponse, CompletionItem,
+    DefinitionRequest, DefinitionResponse, Diagnostic, ForwardRequest, ForwardResponse,
+    PageDimensions, RenderedPosition,
 };
 
 /// Typst's default text family and math face, vendored from typst-assets 0.15.1.
@@ -42,7 +46,7 @@ const EMBEDDED_FONTS: [&[u8]; 7] = [
     include_bytes!("../assets/NewCMMath-Book.otf"),
 ];
 
-const PROTOCOL_VERSION: u32 = 5;
+const PROTOCOL_VERSION: u32 = 6;
 const TYPST_VERSION: &str = "0.15.1";
 const MAX_VAULT_FILE_BYTES: usize = 50 * 1024 * 1024;
 const MAX_TOTAL_INPUT_BYTES: usize = 70 * 1024 * 1024;
@@ -860,6 +864,78 @@ impl Session {
         }
     }
 
+    pub fn definition(&self, request: DefinitionRequest) -> DefinitionResponse {
+        let Some(revision) = self.revision else {
+            return DefinitionResponse::InvalidRequest {
+                revision: request.revision,
+            };
+        };
+        if request.revision != revision {
+            return DefinitionResponse::StaleRevision { expected: revision };
+        }
+        let (Some(world), Some(document)) = (self.world.as_ref(), self.document.as_ref()) else {
+            return DefinitionResponse::InvalidRequest { revision };
+        };
+        if request.source_text.len() > MAX_COMPLETION_SOURCE_BYTES
+            || request.byte_offset > request.source_text.len()
+            || !request.source_text.is_char_boundary(request.byte_offset)
+        {
+            return DefinitionResponse::InvalidRequest { revision };
+        }
+        let Some(source) = Self::retained_source(world, &request.source) else {
+            return DefinitionResponse::InvalidRequest { revision };
+        };
+        let Some(mapping) =
+            CursorMapping::resolve(&request.source_text, source.text(), request.byte_offset)
+        else {
+            return DefinitionResponse::NoDefinition { revision };
+        };
+        let Some(target) = definition(
+            world,
+            Some(document),
+            &source,
+            mapping.snapshot_cursor,
+            Side::Before,
+        )
+        .or_else(|| {
+            definition(
+                world,
+                Some(document),
+                &source,
+                mapping.snapshot_cursor,
+                Side::After,
+            )
+        }) else {
+            return DefinitionResponse::NoDefinition { revision };
+        };
+        let location = match target {
+            Definition::Span(span) => span.id().and_then(|id| {
+                let path = world.relative_source_path(id)?;
+                let target_source = world.source(id).ok()?;
+                let mut byte_offset = world.range(span)?.start;
+                if byte_offset > target_source.text().len()
+                    || !target_source.text().is_char_boundary(byte_offset)
+                {
+                    return None;
+                }
+                if path == request.source {
+                    byte_offset = mapping.to_live(byte_offset)?;
+                }
+                Some((path, byte_offset))
+            }),
+            Definition::File(id) => world.relative_source_path(id).map(|path| (path, 0)),
+            Definition::Std(_) => None,
+        };
+        match location {
+            Some((path, byte_offset)) => DefinitionResponse::Source {
+                revision,
+                path,
+                byte_offset,
+            },
+            None => DefinitionResponse::NoDefinition { revision },
+        }
+    }
+
     pub fn forward(&self, request: ForwardRequest) -> ForwardResponse {
         let Some(revision) = self.revision else {
             return ForwardResponse::InvalidRequest {
@@ -1049,6 +1125,12 @@ impl TypstianWasmSession {
         let request = serde_json::from_str(request_json)
             .map_err(|error| JsValue::from_str(&format!("invalid complete request: {error}")))?;
         protocol_json(self.inner.complete(request), "complete")
+    }
+
+    pub fn definition(&self, request_json: &str) -> Result<String, JsValue> {
+        let request = serde_json::from_str(request_json)
+            .map_err(|error| JsValue::from_str(&format!("invalid definition request: {error}")))?;
+        protocol_json(self.inner.definition(request), "definition")
     }
 
     pub fn forward(&self, request_json: &str) -> Result<String, JsValue> {

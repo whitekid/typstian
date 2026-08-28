@@ -13,7 +13,8 @@ type WorkerMethod =
   | "compile"
   | "jump"
   | "forward"
-  | "complete";
+  | "complete"
+  | "definition";
 
 interface WorkerRequest {
   type: "request";
@@ -196,6 +197,9 @@ async function dispatch(
   }
   if (method === "complete") {
     return { value: boundedOutput(activeSession.complete(JSON.stringify(payload))) };
+  }
+  if (method === "definition") {
+    return { value: boundedOutput(activeSession.definition(JSON.stringify(payload))) };
   }
   return compile(activeSession, payload as { revision: number; entryPath: string });
 }

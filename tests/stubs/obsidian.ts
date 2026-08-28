@@ -53,6 +53,8 @@ export class TFolder {
   constructor(public path: string = "") {}
 }
 
+export const Platform = { isMacOS: false };
+
 export class FileSystemAdapter {
   constructor(private readonly basePath: string) {}
 

@@ -79,7 +79,7 @@ it("loads embedded Brotli WASM without a release-side asset", { timeout: 15_000 
         for (const response of responses) {
           expect(JSON.parse(response)).toEqual({
             type: "environment",
-            protocolVersion: 5,
+            protocolVersion: 6,
             typstVersion: "0.15.1",
           });
         }
@@ -220,7 +220,7 @@ it("embeds a Korean glyph", { timeout: 30_000 }, async () => {
     });
     try {
       const environment = await client.checkEnvironment();
-      expect(environment).toEqual({ protocolVersion: 5, typstVersion: "0.15.1" });
+      expect(environment).toEqual({ protocolVersion: 6, typstVersion: "0.15.1" });
 
       const result = await client.compile({ revision: 1, entryPath: "main.typ" });
       expect(result.ok).toBe(true);
@@ -266,6 +266,35 @@ it("embeds a Korean glyph", { timeout: 30_000 }, async () => {
         xPt: 0,
         yPt: 0
       })).resolves.toEqual({ revision: 1, location: null });
+    } finally {
+      client.close();
+    }
+  }, 30_000);
+
+  it("answers go to definition from the checked-in retained WASM session", async () => {
+    const rootPath = path.resolve("helper/tests/fixtures/definition");
+    const client = new TypstianCompilerClient({
+      rootPath,
+      wasmPath: path.resolve("helper/wasm/pkg/typstian_wasm_bg.wasm"),
+    });
+    try {
+      const compiled = await client.compile({ revision: 6, entryPath: "main.typ" });
+      expect(compiled.ok).toBe(true);
+      const sourceText = fs.readFileSync(path.join(rootPath, "main.typ"), "utf8");
+      const cursor = sourceText.lastIndexOf("local") + 2;
+
+      await expect(client.definition({
+        revision: 6,
+        source: "main.typ",
+        sourceText,
+        byteOffset: cursor,
+      })).resolves.toEqual({
+        revision: 6,
+        location: {
+          path: "main.typ",
+          byteOffset: sourceText.indexOf("local ="),
+        },
+      });
     } finally {
       client.close();
     }

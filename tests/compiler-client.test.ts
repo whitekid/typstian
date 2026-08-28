@@ -48,6 +48,15 @@ class FakeWasmEngine implements WasmEngine {
     return this.request("complete", payload);
   }
 
+  definition(payload: {
+    revision: number;
+    source: string;
+    sourceText: string;
+    byteOffset: number;
+  }): Promise<string> {
+    return this.request("definition", payload);
+  }
+
   respond(response: unknown): void {
     const pending = this.pending.shift();
     if (pending === undefined) throw new Error("No pending WASM request.");
@@ -98,6 +107,28 @@ function harness(
   return { client, engineFactory, engines };
 }
 
+
+async function retainRevision(
+  client: TypstianCompilerClient,
+  engines: FakeWasmEngine[],
+  revision: number,
+): Promise<FakeWasmEngine> {
+  const compile = client.compile({ revision, entryPath: "docs/main.typ" });
+  await vi.waitFor(() => expect(engines[0]?.calls).toHaveLength(1));
+  const engine = engines[0]!;
+  engine.respond({
+    type: "compiled",
+    revision,
+    pdfBase64: pdf.toString("base64"),
+    pdfBytes: pdf.length,
+    pages: [{ widthPt: 240, heightPt: 180 }],
+    dependencies: ["docs/main.typ"],
+    diagnostics: [],
+  });
+  await compile;
+  return engine;
+}
+
 const pdf = Buffer.from("%PDF-1.7\n%%EOF\n");
 
 describe("TypstianCompilerClient", () => {
@@ -113,9 +144,9 @@ describe("TypstianCompilerClient", () => {
       maxOutputBytes: 70 * 1024 * 1024,
     });
 
-    engines[0]!.respond({ type: "environment", protocolVersion: 5, typstVersion: "0.15.1" });
+    engines[0]!.respond({ type: "environment", protocolVersion: 6, typstVersion: "0.15.1" });
 
-    await expect(result).resolves.toEqual({ protocolVersion: 5, typstVersion: "0.15.1" });
+    await expect(result).resolves.toEqual({ protocolVersion: 6, typstVersion: "0.15.1" });
     expect(engineFactory).toHaveBeenCalledOnce();
     client.close();
   });
@@ -319,6 +350,196 @@ describe("TypstianCompilerClient", () => {
     client.close();
   });
 
+  it("resolves a definition from the retained document with the exact live cursor", async () => {
+    const { client, engines } = harness();
+    const compile = client.compile({ revision: 31, entryPath: "docs/main.typ" });
+    await vi.waitFor(() => expect(engines[0]?.calls).toHaveLength(1));
+    engines[0]!.respond({
+      type: "compiled",
+      revision: 31,
+      pdfBase64: pdf.toString("base64"),
+      pdfBytes: pdf.length,
+      pages: [{ widthPt: 240, heightPt: 180 }],
+      dependencies: ["docs/main.typ", "docs/defs.typ"],
+      diagnostics: [],
+    });
+    await compile;
+
+    const result = client.definition({
+      revision: 31,
+      source: "docs/main.typ",
+      sourceText: "#let 한글 = 1\n#한글",
+      byteOffset: 25,
+    });
+    await vi.waitFor(() => expect(engines[0]?.calls.at(-1)).toEqual({
+      kind: "definition",
+      payload: {
+        revision: 31,
+        source: "docs/main.typ",
+        sourceText: "#let 한글 = 1\n#한글",
+        byteOffset: 25,
+      },
+    }));
+    engines[0]!.respond({
+      type: "source",
+      revision: 31,
+      path: "docs/defs.typ",
+      byteOffset: 7,
+    });
+
+    await expect(result).resolves.toEqual({
+      revision: 31,
+      location: { path: "docs/defs.typ", byteOffset: 7 },
+    });
+    client.close();
+  });
+
+
+  it("returns no definition from the retained document", async () => {
+    const { client, engines } = harness();
+    const engine = await retainRevision(client, engines, 32);
+
+    const result = client.definition({
+      revision: 32,
+      source: "docs/main.typ",
+      sourceText: "#let value = 1",
+      byteOffset: 4,
+    });
+    await vi.waitFor(() => expect(engine.calls.at(-1)?.kind).toBe("definition"));
+    engine.respond({ type: "no-definition", revision: 32 });
+
+    await expect(result).resolves.toEqual({ revision: 32, location: null });
+    client.close();
+  });
+
+  it("refuses definition without a retained revision before loading the engine", async () => {
+    const { client, engineFactory } = harness();
+
+    await expect(
+      client.definition({
+        revision: 1,
+        source: "docs/main.typ",
+        sourceText: "#value",
+        byteOffset: 1,
+      }),
+    ).rejects.toMatchObject({ code: "stale" });
+    expect(engineFactory).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it("refuses invalid definition requests before loading the engine", async () => {
+    const { client, engineFactory } = harness();
+    const invalidRequests = [
+      {
+        revision: 1,
+        source: "../outside.typ",
+        sourceText: "#value",
+        byteOffset: 1,
+      },
+      {
+        revision: 1,
+        source: "docs/main.typ",
+        sourceText: "#value",
+        byteOffset: -1,
+      },
+      {
+        revision: 1,
+        source: "docs/main.typ",
+        sourceText: "x".repeat(2 * 1024 * 1024 + 1),
+        byteOffset: 1,
+      },
+    ];
+
+    for (const request of invalidRequests) {
+      await expect(client.definition(request)).rejects.toMatchObject({ code: "invalid-input" });
+    }
+    expect(engineFactory).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it("rejects malformed definition replies without failing the retained session", async () => {
+    const { client, engines } = harness();
+    const engine = await retainRevision(client, engines, 33);
+    const request = {
+      revision: 33,
+      source: "docs/main.typ",
+      sourceText: "#value",
+      byteOffset: 1,
+    };
+    const malformedReplies = [
+      { type: "unknown", revision: 33 },
+      { type: "source", revision: 33, path: "../outside.typ", byteOffset: 0 },
+      { type: "source", revision: 33, path: "docs/defs.typ", byteOffset: -1 },
+      { type: "no-definition", revision: 34 },
+    ];
+
+    for (const reply of malformedReplies) {
+      const callCount = engine.calls.length;
+      const result = client.definition(request);
+      await vi.waitFor(() => expect(engine.calls).toHaveLength(callCount + 1));
+      engine.respond(reply);
+      await expect(result).rejects.toMatchObject({ code: "malformed-protocol" });
+    }
+    expect(engine.dispose).not.toHaveBeenCalled();
+
+    const survivorCallCount = engine.calls.length;
+    const survivor = client.definition(request);
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(survivorCallCount + 1));
+    engine.respond({ type: "no-definition", revision: 33 });
+    await expect(survivor).resolves.toEqual({ revision: 33, location: null });
+    client.close();
+  });
+
+  it("rejects an oversized definition reply without failing the retained session", async () => {
+    const { client, engines } = harness({ maxOutputBytes: 512 });
+    const engine = await retainRevision(client, engines, 34);
+    const request = {
+      revision: 34,
+      source: "docs/main.typ",
+      sourceText: "#value",
+      byteOffset: 1,
+    };
+
+    const oversized = client.definition(request);
+    await vi.waitFor(() => expect(engine.calls.at(-1)?.kind).toBe("definition"));
+    engine.respondRaw("x".repeat(513));
+    await expect(oversized).rejects.toMatchObject({ code: "output-limit" });
+    expect(engine.dispose).not.toHaveBeenCalled();
+
+    const survivorCallCount = engine.calls.length;
+    const survivor = client.definition(request);
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(survivorCallCount + 1));
+    engine.respond({ type: "no-definition", revision: 34 });
+    await expect(survivor).resolves.toEqual({ revision: 34, location: null });
+    client.close();
+  });
+
+  it("aborts one definition without failing the retained session", async () => {
+    const { client, engines } = harness();
+    const engine = await retainRevision(client, engines, 35);
+    const controller = new AbortController();
+    const request = {
+      revision: 35,
+      source: "docs/main.typ",
+      sourceText: "#value",
+      byteOffset: 1,
+    };
+    const callCount = engine.calls.length;
+
+    const aborted = client.definition({ ...request, signal: controller.signal });
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(callCount + 1));
+    controller.abort();
+    await expect(aborted).rejects.toMatchObject({ code: "aborted" });
+    expect(engine.dispose).not.toHaveBeenCalled();
+
+    const survivor = client.definition(request);
+    engine.respond({ type: "no-definition", revision: 35 });
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(callCount + 2));
+    engine.respond({ type: "no-definition", revision: 35 });
+    await expect(survivor).resolves.toEqual({ revision: 35, location: null });
+    client.close();
+  });
+
 it("passes the pinned overlay snapshot to the engine compile request", async () => {
     const { client, engines } = harness();
     const overlay = new Map([
@@ -513,8 +734,8 @@ it("passes the pinned overlay snapshot to the engine compile request", async () 
 
     const environment = client.checkEnvironment();
     await vi.waitFor(() => expect(engines[1]?.calls).toHaveLength(1));
-    engines[1]!.respond({ type: "environment", protocolVersion: 5, typstVersion: "0.15.1" });
-    await expect(environment).resolves.toEqual({ protocolVersion: 5, typstVersion: "0.15.1" });
+    engines[1]!.respond({ type: "environment", protocolVersion: 6, typstVersion: "0.15.1" });
+    await expect(environment).resolves.toEqual({ protocolVersion: 6, typstVersion: "0.15.1" });
     client.close();
   });
 
@@ -599,7 +820,7 @@ it("passes the pinned overlay snapshot to the engine compile request", async () 
     await vi.waitFor(() => expect(outputHarness.engines[0]?.calls).toHaveLength(1));
     outputHarness.engines[0]!.respond({
       type: "environment",
-      protocolVersion: 5,
+      protocolVersion: 6,
       typstVersion: "0.15.1",
     });
     await expect(environment).rejects.toMatchObject({ code: "output-limit" });
@@ -677,7 +898,7 @@ it("passes the pinned overlay snapshot to the engine compile request", async () 
     );
     engines[0]!.respond({
       type: "environment",
-      protocolVersion: 5,
+      protocolVersion: 6,
       typstVersion: "0.15.1",
     });
     await expect(environment).resolves.toMatchObject({ typstVersion: "0.15.1" });

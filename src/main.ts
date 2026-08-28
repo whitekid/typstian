@@ -20,7 +20,7 @@ import {
 } from "./compile-status";
 import { DependencyIndex } from "./dependency-index";
 import { collectDirtyBuffers } from "./dirty-buffer-overlay";
-import { CompletionScheduler } from "./completion-scheduler";
+import { OptionalReadScheduler } from "./optional-read-scheduler";
 import { ForwardSearchScheduler } from "./forward-search-scheduler";
 import { SourceNavigationScheduler } from "./source-navigation-scheduler";
 import { chooseSourceEditorLeaf } from "./editor-leaf-policy";
@@ -30,6 +30,7 @@ import {
   TypstEditorView,
   type TypstCompletionRequest,
   type TypstCompletionResponse,
+  type TypstDefinitionRequest,
   type TypstForwardSearchRequest
 } from "./editor-view";
 import {
@@ -87,10 +88,14 @@ export default class TypstianPlugin extends Plugin {
   }>(({ editor, request }, isCurrent) =>
     this.handleForwardSearch(editor, request, isCurrent)
   );
-  private readonly completionScheduler = new CompletionScheduler<
+  private readonly completionScheduler = new OptionalReadScheduler<
     { editor: TypstEditorView; request: TypstCompletionRequest },
     TypstCompletionResponse
   >(({ editor, request }, isCurrent) => this.handleCompletion(editor, request, isCurrent));
+  private readonly definitionScheduler = new OptionalReadScheduler<
+    { editor: TypstEditorView; request: TypstDefinitionRequest },
+    void
+  >(({ editor, request }, isCurrent) => this.handleDefinition(editor, request, isCurrent));
   private readonly sourceNavigationScheduler =
     new SourceNavigationScheduler<TypstSourceLocation>(
       (location, isCurrent) => this.performRevealSourceLocation(location, isCurrent)
@@ -140,6 +145,16 @@ export default class TypstianPlugin extends Plugin {
         const source = this.activeTypstPath();
         if (source === null) return false;
         if (!checking) void this.openPreview(source);
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "go-to-definition",
+      name: MESSAGES.commands.goToDefinition,
+      checkCallback: (checking) => {
+        const editor = this.app.workspace.getActiveViewOfType(TypstEditorView);
+        if (editor?.file?.extension !== "typ") return false;
+        if (!checking) void editor.goToDefinition();
         return true;
       }
     });
@@ -232,6 +247,7 @@ export default class TypstianPlugin extends Plugin {
     this.lifecycleGeneration += 1;
     this.forwardSearchScheduler.dispose();
     this.completionScheduler.dispose();
+    this.definitionScheduler.dispose();
     this.sourceNavigationScheduler.dispose();
     for (const compiler of this.compilers) compiler.close();
     this.compilers.clear();
@@ -279,6 +295,14 @@ export default class TypstianPlugin extends Plugin {
         { editor: view, request },
         () => !this.unloaded && view.getViewData() === request.sourceText
       ),
+      onDefinition: async (request) => {
+        await this.definitionScheduler.schedule(
+          { editor: view, request },
+          () => !this.unloaded
+            && view.file?.path === request.sourcePath
+            && view.getViewData() === request.sourceText,
+        );
+      },
       onClose: () => {
         this.forwardSearchScheduler.cancel(view);
       },
@@ -342,6 +366,7 @@ export default class TypstianPlugin extends Plugin {
       jump: (request) => getCompiler().jump(request),
       forward: (request) => getCompiler().forward(request),
       complete: (request) => getCompiler().complete(request),
+      definition: (request) => getCompiler().definition(request),
       onCompiled: (sourcePath, result) => {
         this.recordDependencies(sourcePath, result);
         this.publishDiagnostics(result);
@@ -643,6 +668,41 @@ private handleVaultPath(vaultPath: string, includeDirectEntry = true): void {
     return result === null
       ? null
       : { byteOffset: result.byteOffset, completions: result.completions };
+  }
+
+
+  private async handleDefinition(
+    editor: TypstEditorView,
+    request: TypstDefinitionRequest,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    if (
+      !isCurrent()
+      || editor.file?.path !== request.sourcePath
+      || editor.getViewData() !== request.sourceText
+    ) {
+      return;
+    }
+
+    const preview = this.previewForSource(request.sourcePath);
+    if (preview === undefined || !isCurrent()) return;
+
+    const vaultRoot = this.vaultRoot();
+    const compilerSource = resolveCompilerEntryPath(
+      vaultRoot,
+      this.compilationRoot(vaultRoot),
+      request.sourcePath,
+    );
+    if (compilerSource === null || !isCurrent()) return;
+
+    const location = await preview.definition(
+      compilerSource,
+      request.sourceText,
+      request.byteOffset,
+      isCurrent,
+    );
+    if (location === null || !isCurrent()) return;
+    await this.revealSourceLocation(location, isCurrent);
   }
 
   private handleDirtyPath(sourcePath: string): void {

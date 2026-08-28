@@ -908,6 +908,70 @@ describe("TypstianPlugin completion routing", () => {
   });
 });
 
+describe("TypstianPlugin definition routing", () => {
+  it("asks only the owning preview and reuses safe source navigation", async () => {
+    const { internals, plugin } = harness([]);
+    const unrelated = {
+      getSourcePath: vi.fn(() => "other/doc.typ"),
+      definition: vi.fn(),
+    };
+    const owning = {
+      getSourcePath: vi.fn(() => "book/main.typ"),
+      definition: vi.fn().mockResolvedValue({ path: "book/defs.typ", byteOffset: 7 }),
+    };
+    vi.spyOn(internals, "previewViews").mockReturnValue([unrelated, owning] as never);
+    const reveal = vi.spyOn(internals, "revealSourceLocation").mockResolvedValue(undefined);
+    const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+    const editor = new TypstEditorView(leaf);
+    editor.file = fileAt("book/main.typ");
+    editor.setViewData("#let x = 1\n#x", true);
+    await plugin.onload();
+    const definitionInternals = plugin as unknown as {
+      handleDefinition(
+        editor: TypstEditorView,
+        request: { sourcePath: string; sourceText: string; byteOffset: number },
+        isCurrent: () => boolean,
+      ): Promise<void>;
+    };
+
+    await definitionInternals.handleDefinition(
+      editor,
+      { sourcePath: "book/main.typ", sourceText: "#let x = 1\n#x", byteOffset: 13 },
+      () => true,
+    );
+
+    expect(unrelated.definition).not.toHaveBeenCalled();
+    expect(owning.definition).toHaveBeenCalledWith(
+      "book/main.typ",
+      "#let x = 1\n#x",
+      13,
+      expect.any(Function),
+    );
+    expect(reveal).toHaveBeenCalledWith(
+      { path: "book/defs.typ", byteOffset: 7 },
+      expect.any(Function),
+    );
+    plugin.onunload();
+  });
+
+  it("registers Go to definition for the active Typst editor", async () => {
+    const { commands, plugin, workspace } = harness([]);
+    const goToDefinition = vi.fn().mockResolvedValue(undefined);
+    workspace.getActiveViewOfType.mockReturnValue({
+      file: { extension: "typ" },
+      goToDefinition,
+    } as never);
+    await plugin.onload();
+
+    const command = commands.get("go-to-definition");
+    expect(command?.name).toBe("Go to definition");
+    expect(command?.checkCallback?.(true)).toBe(true);
+    expect(command?.checkCallback?.(false)).toBe(true);
+    expect(goToDefinition).toHaveBeenCalledOnce();
+    plugin.onunload();
+  });
+});
+
 describe("TypstianPlugin user-facing wording", () => {
   function noticeHarness() {
     const { internals, plugin, vault } = harness([]);

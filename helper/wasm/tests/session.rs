@@ -1,7 +1,8 @@
 use base64::Engine;
 use typstian_wasm::protocol::{
-    ClickRequest, ClickResponse, CompleteRequest, CompleteResponse, CompletionItem, ForwardRequest,
-    ForwardResponse, PageDimensions, RenderedPosition,
+    ClickRequest, ClickResponse, CompleteRequest, CompleteResponse, CompletionItem,
+    DefinitionRequest, DefinitionResponse, ForwardRequest, ForwardResponse, PageDimensions,
+    RenderedPosition,
 };
 use typstian_wasm::{Clock, CompileRequest, CompileResult, FileInput, Session};
 
@@ -376,6 +377,210 @@ fn completions(response: &CompleteResponse) -> &[CompletionItem] {
         CompleteResponse::Completions { completions, .. } => completions,
         other => panic!("expected completions, got {other:?}"),
     }
+}
+
+fn definition_session(revision: u64) -> (Session, String) {
+    let text = std::fs::read_to_string("../tests/fixtures/definition/main.typ").unwrap();
+    let mut session = Session::new();
+    let compiled = session
+        .compile(CompileRequest {
+            clock: CLOCK,
+            entry: "main.typ".into(),
+            revision,
+            files: vec![
+                fixture("definition", "main.typ"),
+                fixture("definition", "defs.typ"),
+            ],
+            packages: Vec::new(),
+        })
+        .expect("definition fixture compiles");
+    assert_eq!(error_messages(&compiled), Vec::<&str>::new());
+    (session, text)
+}
+
+fn definition_in(
+    session: &Session,
+    revision: u64,
+    source_text: &str,
+    byte_offset: usize,
+) -> DefinitionResponse {
+    session.definition(DefinitionRequest {
+        revision,
+        source: "main.typ".into(),
+        source_text: source_text.into(),
+        byte_offset,
+    })
+}
+
+#[test]
+fn finds_a_local_variable_definition_in_the_retained_source() {
+    let (session, text) = definition_session(20);
+    let cursor = text.rfind("local").unwrap() + 2;
+
+    assert_eq!(
+        session.definition(DefinitionRequest {
+            revision: 20,
+            source: "main.typ".into(),
+            source_text: text.clone(),
+            byte_offset: cursor,
+        }),
+        DefinitionResponse::Source {
+            revision: 20,
+            path: "main.typ".into(),
+            byte_offset: text.find("local =").unwrap(),
+        }
+    );
+}
+
+#[test]
+fn finds_an_imported_symbol_definition_in_its_source() {
+    let (session, text) = definition_session(21);
+    let cursor = text.rfind("imported").unwrap() + 2;
+    let defs = std::fs::read_to_string("../tests/fixtures/definition/defs.typ").unwrap();
+
+    assert_eq!(
+        definition_in(&session, 21, &text, cursor),
+        DefinitionResponse::Source {
+            revision: 21,
+            path: "defs.typ".into(),
+            byte_offset: defs.find("imported =").unwrap(),
+        }
+    );
+}
+
+#[test]
+fn opens_an_imported_file_at_its_start() {
+    let (session, text) = definition_session(22);
+    let cursor = text.find("defs.typ").unwrap() + 2;
+
+    assert_eq!(
+        definition_in(&session, 22, &text, cursor),
+        DefinitionResponse::Source {
+            revision: 22,
+            path: "defs.typ".into(),
+            byte_offset: 0,
+        }
+    );
+}
+
+#[test]
+fn finds_a_label_definition_from_the_retained_document() {
+    let (session, text) = definition_session(23);
+    let cursor = text.find("@target").unwrap() + 3;
+
+    assert_eq!(
+        definition_in(&session, 23, &text, cursor),
+        DefinitionResponse::Source {
+            revision: 23,
+            path: "main.typ".into(),
+            byte_offset: text.find("heading[Target]").unwrap(),
+        }
+    );
+}
+
+#[test]
+fn offers_no_source_for_a_standard_library_definition() {
+    let (session, text) = definition_session(24);
+    let cursor = text.find("#text").unwrap() + 3;
+
+    assert_eq!(
+        definition_in(&session, 24, &text, cursor),
+        DefinitionResponse::NoDefinition { revision: 24 }
+    );
+}
+
+#[test]
+fn maps_a_definition_cursor_through_text_typed_since_the_compile() {
+    let (session, text) = definition_session(25);
+    let usage = text.find("local + imported").unwrap();
+    let mut live = text.clone();
+    live.insert(usage + "local".len(), 'x');
+
+    assert_eq!(
+        definition_in(&session, 25, &live, usage + "localx".len()),
+        DefinitionResponse::Source {
+            revision: 25,
+            path: "main.typ".into(),
+            byte_offset: text.find("local =").unwrap(),
+        }
+    );
+}
+
+#[test]
+fn drops_a_same_source_target_after_the_live_splice() {
+    let (session, text) = definition_session(26);
+    let reference_end = text.find("@later").unwrap() + "@later".len();
+    let mut live = text.clone();
+    live.insert(reference_end, 'x');
+
+    assert_eq!(
+        definition_in(&session, 26, &live, reference_end + 1),
+        DefinitionResponse::NoDefinition { revision: 26 }
+    );
+}
+
+#[test]
+fn offers_no_definition_when_the_live_buffer_diverged_away_from_the_cursor() {
+    let (session, text) = definition_session(27);
+    let usage = text.find("local + imported").unwrap();
+    let mut live = text.clone();
+    live.insert(0, 'X');
+
+    assert_eq!(
+        definition_in(&session, 27, &live, usage + 1 + "local".len()),
+        DefinitionResponse::NoDefinition { revision: 27 }
+    );
+}
+
+#[test]
+fn offers_no_definition_where_there_is_no_source_target() {
+    let (session, text) = definition_session(28);
+    let cursor = text.find("Standard]").unwrap() + "Standard".len();
+
+    assert_eq!(
+        definition_in(&session, 28, &text, cursor),
+        DefinitionResponse::NoDefinition { revision: 28 }
+    );
+}
+
+#[test]
+fn rejects_a_stale_definition_revision_without_recompiling() {
+    let (session, text) = definition_session(29);
+    let cursor = text.rfind("local").unwrap() + 2;
+
+    assert_eq!(
+        definition_in(&session, 28, &text, cursor),
+        DefinitionResponse::StaleRevision { expected: 29 }
+    );
+}
+
+#[test]
+fn bounds_definition_source_paths_text_and_cursor_offsets() {
+    let (session, text) = definition_session(30);
+
+    assert_eq!(
+        session.definition(DefinitionRequest {
+            revision: 30,
+            source: "../outside.typ".into(),
+            source_text: text.clone(),
+            byte_offset: 0,
+        }),
+        DefinitionResponse::InvalidRequest { revision: 30 }
+    );
+    assert_eq!(
+        definition_in(&session, 30, &text, text.len() + 1),
+        DefinitionResponse::InvalidRequest { revision: 30 }
+    );
+    let unicode = format!("한{text}");
+    assert_eq!(
+        definition_in(&session, 30, &unicode, 1),
+        DefinitionResponse::InvalidRequest { revision: 30 }
+    );
+    let oversized = "x".repeat(2 * 1024 * 1024 + 1);
+    assert_eq!(
+        definition_in(&session, 30, &oversized, 0),
+        DefinitionResponse::InvalidRequest { revision: 30 }
+    );
 }
 
 #[test]

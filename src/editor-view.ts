@@ -24,7 +24,7 @@ import {
   keymap,
   lineNumbers,
 } from "@codemirror/view";
-import { TextFileView, type WorkspaceLeaf } from "obsidian";
+import { Platform, TextFileView, type WorkspaceLeaf } from "obsidian";
 
 import type { CompilerCompletion, CompilerDiagnostic } from "./compiler-client";
 import { typstLanguage } from "./language";
@@ -37,6 +37,8 @@ export interface TypstForwardSearchRequest {
   sourceText: string;
   byteOffset: number;
 }
+
+export type TypstDefinitionRequest = TypstForwardSearchRequest;
 
 export interface TypstCompletionRequest {
   sourcePath: string;
@@ -63,8 +65,10 @@ export interface TypstEditorViewOptions {
   onComplete?: (
     request: TypstCompletionRequest,
   ) => Promise<TypstCompletionResponse | null>;
+  onDefinition?: (request: TypstDefinitionRequest) => void | Promise<void>;
   onClose?: () => void;
   onOpenPreview?: (sourcePath: string) => void;
+  isMacOS?: boolean;
 }
 
 /**
@@ -159,7 +163,9 @@ export class TypstEditorView extends TextFileView {
   private readonly onComplete: (
     request: TypstCompletionRequest,
   ) => Promise<TypstCompletionResponse | null>;
+  private readonly onDefinition: (request: TypstDefinitionRequest) => void | Promise<void>;
   private readonly onClosed: () => void;
+  private readonly isMacOS: boolean;
   private dirty = false;
   private editGeneration = 0;
   constructor(leaf: WorkspaceLeaf, options: TypstEditorViewOptions = {}) {
@@ -167,7 +173,9 @@ export class TypstEditorView extends TextFileView {
     this.onDirty = options.onDirty ?? (() => undefined);
     this.onForwardSearch = options.onForwardSearch ?? (() => undefined);
     this.onComplete = options.onComplete ?? (() => Promise.resolve(null));
+    this.onDefinition = options.onDefinition ?? (() => undefined);
     this.onClosed = options.onClose ?? (() => undefined);
+    this.isMacOS = options.isMacOS ?? Platform.isMacOS;
     const onOpenPreview = options.onOpenPreview;
     // Registered with the view, not derived from the active view, so a Typst
     // editor in a background split offers it too. A view built without the
@@ -284,6 +292,17 @@ export class TypstEditorView extends TextFileView {
     return true;
   }
 
+
+  /** Requests a retained-document definition for the current editor cursor. */
+  async goToDefinition(): Promise<void> {
+    const file = this.file;
+    if (file === null || file.extension !== "typ") return;
+    const sourceText = this.editorView.state.doc.toString();
+    const byteOffset = utf8ByteOffset(sourceText, this.editorView.state.selection.main.head);
+    if (byteOffset === null) return;
+    await this.onDefinition({ sourcePath: file.path, sourceText, byteOffset });
+  }
+
   override onClose(): Promise<void> {
     this.onClosed();
     this.editorView.destroy();
@@ -355,6 +374,25 @@ export class TypstEditorView extends TextFileView {
       extensions: [
         editorExtensions,
         autocompletion({ override: [this.completionSource] }),
+        EditorView.domEventHandlers({
+          click: (event, view) => {
+            const primaryModifier = this.isMacOS ? event.metaKey : event.ctrlKey;
+            if (
+              event.button !== 0
+              || !primaryModifier
+              || event.altKey
+              || event.shiftKey
+            ) {
+              return false;
+            }
+            const position = view.posAtCoords({ x: event.clientX, y: event.clientY });
+            if (position === null) return false;
+            event.preventDefault();
+            view.dispatch({ selection: { anchor: position } });
+            void this.goToDefinition();
+            return true;
+          },
+        }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !this.applyingExternalData) {
             this.data = update.state.doc.toString();
