@@ -167,6 +167,7 @@ export class TypstEditorView extends TextFileView {
   private readonly onClosed: () => void;
   private readonly isMacOS: boolean;
   private dirty = false;
+  private closed = false;
   private editGeneration = 0;
   constructor(leaf: WorkspaceLeaf, options: TypstEditorViewOptions = {}) {
     super(leaf);
@@ -303,7 +304,13 @@ export class TypstEditorView extends TextFileView {
     await this.onDefinition({ sourcePath: file.path, sourceText, byteOffset });
   }
 
+
+  isClosed(): boolean {
+    return this.closed;
+  }
+
   override onClose(): Promise<void> {
+    this.closed = true;
     this.onClosed();
     this.editorView.destroy();
     return Promise.resolve();

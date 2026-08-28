@@ -478,6 +478,22 @@ fn finds_a_label_definition_from_the_retained_document() {
     );
 }
 
+
+#[test]
+fn maps_same_file_definition_after_the_cursor_when_source_is_identical() {
+    let (session, text) = definition_session(31);
+    let cursor = text.find("@later").unwrap() + 3;
+
+    assert_eq!(
+        definition_in(&session, 31, &text, cursor),
+        DefinitionResponse::Source {
+            revision: 31,
+            path: "main.typ".into(),
+            byte_offset: 173,
+        }
+    );
+}
+
 #[test]
 fn offers_no_source_for_a_standard_library_definition() {
     let (session, text) = definition_session(24);

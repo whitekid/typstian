@@ -531,7 +531,7 @@ impl CursorMapping {
         if live == snapshot {
             return Some(Self {
                 snapshot_cursor: cursor,
-                prefix: cursor,
+                prefix: snapshot.len(),
             });
         }
         let prefix = common_prefix(live, snapshot);

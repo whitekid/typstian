@@ -299,6 +299,7 @@ export default class TypstianPlugin extends Plugin {
         await this.definitionScheduler.schedule(
           { editor: view, request },
           () => !this.unloaded
+            && !view.isClosed()
             && view.file?.path === request.sourcePath
             && view.getViewData() === request.sourceText,
         );

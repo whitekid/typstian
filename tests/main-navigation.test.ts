@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DependencyIndex } from "../src/dependency-index";
 import TypstianPlugin from "../src/main";
-import { OPEN_PREVIEW_LABEL, TypstEditorView } from "../src/editor-view";
+import { OPEN_PREVIEW_LABEL, TYPST_VIEW_TYPE, TypstEditorView } from "../src/editor-view";
 import {
   TYPST_PREVIEW_VIEW_TYPE,
   TypstPreviewView,
@@ -949,6 +949,52 @@ describe("TypstianPlugin definition routing", () => {
     );
     expect(reveal).toHaveBeenCalledWith(
       { path: "book/defs.typ", byteOffset: 7 },
+      expect.any(Function),
+    );
+    plugin.onunload();
+  });
+
+
+  it("drops a definition after its owning editor closes without cancelling another editor", async () => {
+    const { internals, plugin, viewFactories } = harness([]);
+    let resolveFirst!: (location: { path: string; byteOffset: number }) => void;
+    const firstResult = new Promise<{ path: string; byteOffset: number }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const owning = {
+      getSourcePath: vi.fn(() => "book/main.typ"),
+      definition: vi.fn()
+        .mockImplementationOnce(() => firstResult)
+        .mockResolvedValue({ path: "book/defs.typ", byteOffset: 9 }),
+    };
+    vi.spyOn(internals, "previewViews").mockReturnValue([owning] as never);
+    const reveal = vi.spyOn(internals, "revealSourceLocation").mockResolvedValue(undefined);
+    await plugin.onload();
+
+    const factory = viewFactories.get(TYPST_VIEW_TYPE);
+    if (factory === undefined) throw new Error("Typst editor view factory was not registered.");
+    const createEditor = (): TypstEditorView => {
+      const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+      const view = factory(leaf);
+      if (!(view instanceof TypstEditorView)) throw new Error("Typst editor was not created.");
+      view.file = fileAt("book/main.typ");
+      view.setViewData("#let x = 1\n#x", true);
+      return view;
+    };
+
+    const closedEditor = createEditor();
+    const stale = closedEditor.goToDefinition();
+    await vi.waitFor(() => expect(owning.definition).toHaveBeenCalledOnce());
+    await closedEditor.onClose();
+    resolveFirst({ path: "book/defs.typ", byteOffset: 7 });
+    await stale;
+    expect(reveal).not.toHaveBeenCalled();
+
+    const liveEditor = createEditor();
+    await liveEditor.goToDefinition();
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(reveal).toHaveBeenCalledWith(
+      { path: "book/defs.typ", byteOffset: 9 },
       expect.any(Function),
     );
     plugin.onunload();
