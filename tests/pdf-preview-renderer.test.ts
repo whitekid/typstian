@@ -161,6 +161,16 @@ function modelScrollHeightReplacements(
   };
 }
 
+function pdfRenderer(
+  root: HTMLElement,
+  options: Omit<ConstructorParameters<typeof PdfPreviewRenderer>[1], "toolbar"> & {
+    toolbar?: HTMLElement;
+  },
+): PdfPreviewRenderer {
+  const toolbar = options.toolbar ?? root.ownerDocument.createElement("nav");
+  return new PdfPreviewRenderer(root, { ...options, toolbar });
+}
+
 describe("PdfPreviewRenderer", () => {
   beforeEach(() => {
     vi.stubGlobal("IntersectionObserver", undefined);
@@ -171,13 +181,266 @@ describe("PdfPreviewRenderer", () => {
     vi.unstubAllGlobals();
   });
 
+it("shows accessible page position and disabled edge controls", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({} as CanvasRenderingContext2D);
+    const root = document.createElement("section");
+    const toolbar = document.createElement("nav");
+    const { engine } = engineFor([
+      documentHandle([pageHandle(1), pageHandle(2), pageHandle(3)]),
+    ]);
+    const renderer = pdfRenderer(root, { engine, toolbar });
+
+    await renderer.render(new Uint8Array([1]));
+
+    const previous = toolbar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Previous PDF page"]',
+    );
+    const next = toolbar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Next PDF page"]',
+    );
+    const page = toolbar.querySelector<HTMLInputElement>(
+      'input[aria-label="PDF page number"]',
+    );
+    expect(previous?.disabled).toBe(true);
+    expect(next?.disabled).toBe(false);
+    expect(page?.value).toBe("1");
+    expect(toolbar.textContent).toContain("/ 3");
+  });
+
+it("moves between existing pages with previous and next controls", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({} as CanvasRenderingContext2D);
+    const root = document.createElement("section");
+    const toolbar = document.createElement("nav");
+    const { engine } = engineFor([
+      documentHandle([pageHandle(1), pageHandle(2), pageHandle(3)]),
+    ]);
+    const renderer = pdfRenderer(root, { engine, toolbar });
+    await renderer.render(new Uint8Array([1]));
+    const pages = root.querySelectorAll<HTMLElement>(".typst-pdf-page");
+    const scrollToSecond = vi.fn();
+    const scrollToFirst = vi.fn();
+    pages[1]!.scrollIntoView = scrollToSecond;
+    pages[0]!.scrollIntoView = scrollToFirst;
+
+    toolbar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Next PDF page"]',
+    )!.click();
+
+    expect(scrollToSecond).toHaveBeenCalledWith({ block: "center" });
+    expect(toolbar.querySelector<HTMLInputElement>(
+      'input[aria-label="PDF page number"]',
+    )?.value).toBe("2");
+
+    toolbar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Previous PDF page"]',
+    )!.click();
+
+    expect(scrollToFirst).toHaveBeenCalledWith({ block: "center" });
+  });
+
+it("accepts only safe in-range page numbers and restores invalid input", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({} as CanvasRenderingContext2D);
+    const root = document.createElement("section");
+    const toolbar = document.createElement("nav");
+    const { engine } = engineFor([
+      documentHandle([pageHandle(1), pageHandle(2), pageHandle(3)]),
+    ]);
+    const renderer = pdfRenderer(root, { engine, toolbar });
+    await renderer.render(new Uint8Array([1]));
+    const input = toolbar.querySelector<HTMLInputElement>(
+      'input[aria-label="PDF page number"]',
+    )!;
+    const pageThree = root.querySelector<HTMLElement>(
+      '.typst-pdf-page[data-page="3"]',
+    )!;
+    const scrollToThird = vi.fn();
+    pageThree.scrollIntoView = scrollToThird;
+    const roguePage = root.createDiv({ cls: "typst-pdf-page" });
+    roguePage.dataset.page = "4";
+    const scrollToRogue = vi.fn();
+    roguePage.scrollIntoView = scrollToRogue;
+
+    input.value = "3";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(scrollToThird).toHaveBeenCalledOnce();
+    expect(toolbar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Previous PDF page"]',
+    )?.disabled).toBe(false);
+    expect(toolbar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Next PDF page"]',
+    )?.disabled).toBe(true);
+    for (const invalid of ["0", "4", "1.5", "9007199254740992", "not-a-number"]) {
+      scrollToThird.mockClear();
+      input.value = invalid;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(scrollToThird).not.toHaveBeenCalled();
+      expect(scrollToRogue).not.toHaveBeenCalled();
+      expect(input.value).toBe("3");
+    }
+  });
+
+it("tracks the centered observed page while scrolling", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({} as CanvasRenderingContext2D);
+    let observerCallback: IntersectionObserverCallback | null = null;
+    vi.stubGlobal("IntersectionObserver", class TestIntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "200% 0px";
+      readonly thresholds = [0];
+      constructor(callback: IntersectionObserverCallback) {
+        observerCallback = callback;
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] { return []; }
+    });
+    const root = document.createElement("section");
+    const toolbar = document.createElement("nav");
+    Object.defineProperty(root, "clientHeight", { configurable: true, value: 100 });
+    setRect(root, { top: 0, bottom: 100, height: 100 });
+    const { engine } = engineFor([
+      documentHandle([pageHandle(1), pageHandle(2), pageHandle(3)]),
+    ]);
+    const renderer = pdfRenderer(root, { engine, toolbar });
+    await renderer.render(new Uint8Array([1]));
+    const pages = root.querySelectorAll<HTMLElement>(".typst-pdf-page");
+    const firstRect = vi.spyOn(pages[0]!, "getBoundingClientRect")
+      .mockReturnValue(makeRect({ top: -120, bottom: -20, height: 100 }));
+    const secondRect = vi.spyOn(pages[1]!, "getBoundingClientRect")
+      .mockReturnValue(makeRect({ top: 20, bottom: 120, height: 100 }));
+    const thirdRect = vi.spyOn(pages[2]!, "getBoundingClientRect")
+      .mockReturnValue(makeRect({ top: 140, bottom: 240, height: 100 }));
+    observerCallback!([
+      { target: pages[0], isIntersecting: true },
+      { target: pages[1], isIntersecting: true },
+    ] as unknown as IntersectionObserverEntry[], {} as IntersectionObserver);
+    thirdRect.mockClear();
+
+    root.dispatchEvent(new Event("scroll"));
+
+    const input = toolbar.querySelector<HTMLInputElement>(
+      'input[aria-label="PDF page number"]',
+    );
+    expect(input?.value).toBe("2");
+    expect(thirdRect).not.toHaveBeenCalled();
+
+    firstRect.mockReturnValue(makeRect({ top: -240, bottom: -140, height: 100 }));
+    secondRect.mockReturnValue(makeRect({ top: -120, bottom: -20, height: 100 }));
+    thirdRect.mockReturnValue(makeRect({ top: 20, bottom: 120, height: 100 }));
+    root.dispatchEvent(new Event("scroll"));
+    expect(input?.value).toBe("2");
+
+    observerCallback!([
+      { target: pages[0], isIntersecting: false },
+      { target: pages[1], isIntersecting: false },
+      { target: pages[2], isIntersecting: true },
+    ] as unknown as IntersectionObserverEntry[], {} as IntersectionObserver);
+
+    expect(input?.value).toBe("3");
+  });
+
+it("removes page controls and their behavior on dispose", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({} as CanvasRenderingContext2D);
+    const root = document.createElement("section");
+    const toolbar = document.createElement("nav");
+    const { engine } = engineFor([
+      documentHandle([pageHandle(1), pageHandle(2)]),
+    ]);
+    const renderer = pdfRenderer(root, { engine, toolbar });
+    await renderer.render(new Uint8Array([1]));
+    const navigation = toolbar.querySelector<HTMLElement>(
+      '.typst-pdf-page-navigation',
+    )!;
+    const next = navigation.querySelector<HTMLButtonElement>(
+      'button[aria-label="Next PDF page"]',
+    )!;
+
+    await renderer.dispose();
+    const replacementPage = root.createDiv({ cls: "typst-pdf-page" });
+    replacementPage.dataset.page = "2";
+    const scroll = vi.fn();
+    replacementPage.scrollIntoView = scroll;
+    next.click();
+
+    expect(toolbar.contains(navigation)).toBe(false);
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
+it("resets page controls when the rendered document is cleared", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({} as CanvasRenderingContext2D);
+    const root = document.createElement("section");
+    const toolbar = document.createElement("nav");
+    const { engine } = engineFor([
+      documentHandle([pageHandle(1), pageHandle(2)]),
+    ]);
+    const renderer = pdfRenderer(root, { engine, toolbar });
+    await renderer.render(new Uint8Array([1]));
+
+    await renderer.clear();
+
+    expect(toolbar.querySelector<HTMLInputElement>(
+      'input[aria-label="PDF page number"]',
+    )?.value).toBe("");
+    expect(toolbar.textContent).toContain("/ 0");
+    expect(toolbar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Previous PDF page"]',
+    )?.disabled).toBe(true);
+    expect(toolbar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Next PDF page"]',
+    )?.disabled).toBe(true);
+  });
+
+it("keeps visible page controls stable until replacement pages swap in", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({} as CanvasRenderingContext2D);
+    const replacementRender = deferred<void>();
+    const replacementPage = pageHandle(1, {
+      promise: replacementRender.promise,
+      cancel: vi.fn(),
+    });
+    const replacementStarted = vi.spyOn(replacementPage, "render");
+    const root = document.createElement("section");
+    const toolbar = document.createElement("nav");
+    const { engine } = engineFor([
+      documentHandle([pageHandle(1), pageHandle(2)]),
+      documentHandle([replacementPage, pageHandle(2), pageHandle(3)]),
+    ]);
+    const renderer = pdfRenderer(root, { engine, toolbar });
+    await renderer.render(new Uint8Array([1]));
+    toolbar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Next PDF page"]',
+    )!.click();
+
+    const replacing = renderer.render(new Uint8Array([2]));
+    await vi.waitFor(() => expect(replacementStarted).toHaveBeenCalledOnce());
+
+    expect(toolbar.querySelector<HTMLInputElement>(
+      'input[aria-label="PDF page number"]',
+    )?.value).toBe("2");
+    expect(toolbar.textContent).toContain("/ 2");
+
+    replacementRender.resolve();
+    await replacing;
+    expect(toolbar.querySelector<HTMLInputElement>(
+      'input[aria-label="PDF page number"]',
+    )?.value).toBe("1");
+    expect(toolbar.textContent).toContain("/ 3");
+  });
+
   it("renders Blob bytes as ordered canvas pages with selectable text layers", async () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({} as CanvasRenderingContext2D);
     const root = document.createElement("section");
     const { engine, load } = engineFor([
       documentHandle([pageHandle(1), pageHandle(2)]),
     ]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
 
     await renderer.render(new Blob([new Uint8Array([1, 2, 3])], { type: "application/pdf" }));
     await vi.waitFor(() => {
@@ -198,7 +461,7 @@ describe("PdfPreviewRenderer", () => {
     const { engine, load } = engineFor([
       documentHandle([pageHandle(1)]),
     ]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
 
     await renderer.render(new Uint8Array([1]));
     await renderer.zoomIn();
@@ -223,7 +486,7 @@ describe("PdfPreviewRenderer", () => {
     );
     const root = document.createElement("section");
     const { engine } = engineFor([documentHandle(pages)]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
 
     const rendering = renderer.render(new Uint8Array([1]));
     await vi.waitFor(() => {
@@ -277,7 +540,7 @@ describe("PdfPreviewRenderer", () => {
     const { engine } = engineFor([
       documentHandleForRenders([initialPages, rerenderPages]),
     ]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     await renderer.render(new Uint8Array([1]));
     await vi.waitFor(() => {
       expect(root.querySelectorAll(".typst-pdf-text-layer span")).toHaveLength(49);
@@ -307,7 +570,7 @@ describe("PdfPreviewRenderer", () => {
     const { engine } = engineFor([
       documentHandleForRenders([[pageHandle(1)], [zoomPage]]),
     ]);
-    const renderer = new PdfPreviewRenderer(root, { engine, onPoint });
+    const renderer = pdfRenderer(root, { engine, onPoint });
     await renderer.render(new Uint8Array([1]));
     const visiblePage = root.querySelector<HTMLElement>(".typst-pdf-page");
     if (visiblePage === null) throw new Error("missing visible page");
@@ -341,7 +604,7 @@ describe("PdfPreviewRenderer", () => {
     const { engine, destroyTasks } = engineFor([
       documentHandle([pageHandle(1), secondPage, thirdPage]),
     ]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
 
     const rendering = renderer.render(new Uint8Array([1]));
     await vi.waitFor(() => expect(secondPageRender).toHaveBeenCalledOnce());
@@ -390,7 +653,7 @@ describe("PdfPreviewRenderer", () => {
       });
     });
     const { engine } = engineFor([pdfDocument]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     await renderer.render(new Uint8Array([1]));
     root.scrollTop = 24 * 800 + 200;
     const previousPages = root.firstElementChild;
@@ -421,7 +684,7 @@ describe("PdfPreviewRenderer", () => {
     const lastPageRender = vi.spyOn(pages[48]!, "render");
     const root = document.createElement("section");
     const { engine } = engineFor([documentHandle(pages)]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
 
     const rendering = renderer.render(new Uint8Array([1]));
     await vi.waitFor(() => expect(secondPageRender).toHaveBeenCalledOnce());
@@ -447,7 +710,7 @@ describe("PdfPreviewRenderer", () => {
     const { engine } = engineFor([
       documentHandleForRenders([[pageHandle(1)], [zoomPage], [pageHandle(1)]]),
     ]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     await renderer.render(new Uint8Array([1]));
 
     const zooming = renderer.zoomIn();
@@ -474,7 +737,7 @@ describe("PdfPreviewRenderer", () => {
     try {
       const root = document.createElement("section");
       const { engine } = engineFor([documentHandle([pageHandle(1)])]);
-      const renderer = new PdfPreviewRenderer(root, { engine, zoom: 2 });
+      const renderer = pdfRenderer(root, { engine, zoom: 2 });
       await renderer.render(new Uint8Array([1]));
 
       const page = root.querySelector<HTMLElement>(".typst-pdf-page")!;
@@ -501,7 +764,7 @@ describe("PdfPreviewRenderer", () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({} as CanvasRenderingContext2D);
     const root = document.createElement("section");
     const { engine } = engineFor([documentHandle([pageHandle(1)])]);
-    const renderer = new PdfPreviewRenderer(root, { engine, zoom: 2 });
+    const renderer = pdfRenderer(root, { engine, zoom: 2 });
 
     await renderer.render(new Uint8Array([1]));
 
@@ -514,7 +777,7 @@ describe("PdfPreviewRenderer", () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({} as CanvasRenderingContext2D);
     const root = document.createElement("section");
     const { engine } = engineFor([documentHandle([pageHandle(1)])]);
-    const renderer = new PdfPreviewRenderer(root, { engine, zoom: 2 });
+    const renderer = pdfRenderer(root, { engine, zoom: 2 });
 
     await renderer.render(new Uint8Array([1]));
 
@@ -527,7 +790,7 @@ describe("PdfPreviewRenderer", () => {
     const root = document.createElement("section");
     const { engine } = engineFor([documentHandle([pageHandle(1)])]);
     const onPoint = vi.fn();
-    const renderer = new PdfPreviewRenderer(root, { engine, onPoint });
+    const renderer = pdfRenderer(root, { engine, onPoint });
     await renderer.render(new Uint8Array([1]));
     const page = root.querySelector<HTMLElement>(".typst-pdf-page");
     if (page === null) throw new Error("missing page");
@@ -561,7 +824,7 @@ describe("PdfPreviewRenderer", () => {
       documentHandle([pageHandle(1), pageHandle(2)]),
     ]);
     const onPoint = vi.fn();
-    const renderer = new PdfPreviewRenderer(root, { engine, onPoint });
+    const renderer = pdfRenderer(root, { engine, onPoint });
     await renderer.render(new Uint8Array([1]));
     const second = root.querySelector<HTMLElement>('.typst-pdf-page[data-page="2"]');
     if (second === null) throw new Error("missing second page");
@@ -591,7 +854,7 @@ describe("PdfPreviewRenderer", () => {
     const root = document.createElement("section");
     const { engine } = engineFor([documentHandle([pageHandle(1), pageHandle(2)])]);
     const onPoint = vi.fn();
-    const renderer = new PdfPreviewRenderer(root, { engine, onPoint });
+    const renderer = pdfRenderer(root, { engine, onPoint });
     await renderer.render(new Uint8Array([1]));
     const pages = root.querySelectorAll<HTMLElement>(".typst-pdf-page");
     const second = pages[1];
@@ -627,7 +890,7 @@ describe("PdfPreviewRenderer", () => {
     const root = document.createElement("section");
     const { engine } = engineFor([documentHandle([pageHandle(1)])]);
     const onPoint = vi.fn();
-    const renderer = new PdfPreviewRenderer(root, { engine, onPoint });
+    const renderer = pdfRenderer(root, { engine, onPoint });
     await renderer.render(new Uint8Array([1]));
     const page = root.querySelector<HTMLElement>(".typst-pdf-page");
     const text = root.querySelector<HTMLElement>(".typst-pdf-text-layer span");
@@ -690,7 +953,7 @@ describe("PdfPreviewRenderer", () => {
     const root = popout.document.createElement("section") as unknown as HTMLElement;
     const { engine } = engineFor([documentHandle([pageHandle(1)])]);
     const onPoint = vi.fn();
-    const renderer = new PdfPreviewRenderer(root, { engine, onPoint });
+    const renderer = pdfRenderer(root, { engine, onPoint });
     await renderer.render(new Uint8Array([1]));
     const page = root.querySelector<HTMLElement>(".typst-pdf-page");
     if (page === null) throw new Error("missing popout PDF page");
@@ -716,7 +979,7 @@ describe("PdfPreviewRenderer", () => {
     const root = document.createElement("section");
     const { engine } = engineFor([documentHandle([pageHandle(1)])]);
     const onPoint = vi.fn();
-    const renderer = new PdfPreviewRenderer(root, { engine, onPoint });
+    const renderer = pdfRenderer(root, { engine, onPoint });
     await renderer.render(new Uint8Array([1]));
     const page = root.querySelector<HTMLElement>(".typst-pdf-page");
     if (page === null) throw new Error("missing page");
@@ -744,7 +1007,7 @@ describe("PdfPreviewRenderer", () => {
     const root = document.createElement("section");
     const { engine } = engineFor([documentHandle([rotated])]);
     const onPoint = vi.fn();
-    const renderer = new PdfPreviewRenderer(root, { engine, onPoint });
+    const renderer = pdfRenderer(root, { engine, onPoint });
     await renderer.render(new Uint8Array([1]));
     const page = root.querySelector<HTMLElement>(".typst-pdf-page");
     if (page === null) throw new Error("missing page");
@@ -767,7 +1030,7 @@ describe("PdfPreviewRenderer", () => {
     Object.defineProperty(root, "clientWidth", { get: () => rootWidth });
     const documents = Array.from({ length: 4 }, () => documentHandle([pageHandle(1)]));
     const { engine } = engineFor(documents);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     await renderer.render(new Uint8Array([1]));
 
     await renderer.setZoom(9);
@@ -799,7 +1062,7 @@ describe("PdfPreviewRenderer", () => {
     document.body.append(root);
     Object.defineProperty(root, "clientWidth", { value: 300 });
     const { engine } = engineFor([documentHandle([pageHandle(1)])]);
-    const renderer = new PdfPreviewRenderer(root, { engine, fit: true });
+    const renderer = pdfRenderer(root, { engine, fit: true });
 
     await renderer.render(new Uint8Array([1]));
 
@@ -816,7 +1079,7 @@ describe("PdfPreviewRenderer", () => {
     const renderPage = vi.spyOn(page, "render");
     const { engine } = engineFor([documentHandle([page])]);
     const root = documentRoot();
-    const renderer = new PdfPreviewRenderer(root, {
+    const renderer = pdfRenderer(root, {
       engine,
       pixelRatio: 4,
       zoom: 4,
@@ -871,7 +1134,7 @@ describe("PdfPreviewRenderer", () => {
     const page = pageHandle(1);
     const pageRender = vi.spyOn(page, "render");
     const { engine } = engineFor([documentHandle([page])]);
-    const renderer = new PdfPreviewRenderer(root, { engine, fit: true });
+    const renderer = pdfRenderer(root, { engine, fit: true });
     await renderer.render(new Uint8Array([1]));
 
     expect(root.classList.contains("typst-pdf-preview-scroll")).toBe(true);
@@ -928,7 +1191,7 @@ describe("PdfPreviewRenderer", () => {
     const { engine } = engineFor([
       documentHandleForRenders([[initialPage], [resizedPage]]),
     ]);
-    const renderer = new PdfPreviewRenderer(root, {
+    const renderer = pdfRenderer(root, {
       engine,
       fit: true,
     });
@@ -960,7 +1223,7 @@ describe("PdfPreviewRenderer", () => {
     });
     const root = document.createElement("section");
     const { engine } = engineFor([documentHandle([pageHandle(1)])]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
 
     await renderer.dispose();
 
@@ -986,7 +1249,7 @@ describe("PdfPreviewRenderer", () => {
     const root = popout.document.createElement("section") as unknown as HTMLElement;
     const { engine } = engineFor([documentHandle([pageHandle(1)])]);
 
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     await renderer.dispose();
 
     expect(root.win).toBe(popout);
@@ -1002,13 +1265,27 @@ describe("PdfPreviewRenderer", () => {
     });
     const popout = popoutWindow();
     const root = popout.document.createElement("section") as unknown as HTMLElement;
-    const { engine } = engineFor([documentHandle([pageHandle(1)])]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const toolbar = popout.document.createElement("nav") as unknown as HTMLElement;
+    const { engine } = engineFor([
+      documentHandle([pageHandle(1), pageHandle(2)]),
+    ]);
+    const renderer = pdfRenderer(root, { engine, toolbar });
 
     await renderer.render(new Uint8Array([1]));
 
     const pages = root.querySelector(".typst-pdf-pages");
+    const navigation = toolbar.querySelector(".typst-pdf-page-navigation");
+    const secondPage = root.querySelector<HTMLElement>(
+      '.typst-pdf-page[data-page="2"]',
+    )!;
+    const scroll = vi.fn();
+    secondPage.scrollIntoView = scroll;
+    toolbar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Next PDF page"]',
+    )!.click();
     expect(pages?.ownerDocument.defaultView).toBe(popout);
+    expect(navigation?.ownerDocument.defaultView).toBe(popout);
+    expect(scroll).toHaveBeenCalledOnce();
     await renderer.dispose();
     popout.close();
   });
@@ -1037,7 +1314,7 @@ describe("PdfPreviewRenderer", () => {
     });
     const root = popout.document.createElement("section") as unknown as HTMLElement;
     const { engine } = engineFor([documentHandle([pageHandle(1)])]);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
 
     await renderer.render(new Uint8Array([1]));
 
@@ -1067,7 +1344,7 @@ describe("PdfPreviewRenderer", () => {
       })),
     };
     const root = document.createElement("section");
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
 
     const oldRender = renderer.render(new Uint8Array([1]));
     await renderer.render(new Uint8Array([2]));
@@ -1087,7 +1364,7 @@ describe("PdfPreviewRenderer", () => {
     ]);
     const root = document.createElement("section");
     const onPoint = vi.fn();
-    const renderer = new PdfPreviewRenderer(root, { engine, onPoint });
+    const renderer = pdfRenderer(root, { engine, onPoint });
     await renderer.render(new Uint8Array([1]));
     const oldPage = root.querySelector<HTMLElement>(".typst-pdf-page");
     if (oldPage === null) throw new Error("missing old page");
@@ -1112,7 +1389,7 @@ describe("PdfPreviewRenderer", () => {
     const { engine, destroyTasks } = engineFor([documentHandle([pageHandle(1, renderTask)])]);
     const root = document.createElement("section");
     const onPoint = vi.fn();
-    const renderer = new PdfPreviewRenderer(root, { engine, onPoint });
+    const renderer = pdfRenderer(root, { engine, onPoint });
     const rendering = renderer.render(new Uint8Array([1]));
     await Promise.resolve();
     await Promise.resolve();
@@ -1143,7 +1420,7 @@ describe("PdfPreviewRenderer", () => {
       load: () => loadingTask,
       createTextLayer,
     };
-    const renderer = new PdfPreviewRenderer(documentRoot(), { engine });
+    const renderer = pdfRenderer(documentRoot(), { engine });
     const rendering = renderer.render(new Uint8Array([1]));
     await vi.waitFor(() => {
       expect(createTextLayer).toHaveBeenCalledOnce();
@@ -1177,7 +1454,7 @@ describe("PdfPreviewRenderer", () => {
       clientWidth: { configurable: true, get: () => 600 },
     });
     const setNextScrollHeight = modelScrollHeightReplacements(root, 1_000);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     await renderer.render(new Uint8Array([1]));
     root.scrollTop = 300;
 
@@ -1220,7 +1497,7 @@ describe("PdfPreviewRenderer", () => {
       clientWidth: { configurable: true, get: () => 600 },
     });
     const setNextScrollHeight = modelScrollHeightReplacements(root, 1_000);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     await renderer.render(new Uint8Array([1]));
     root.scrollTop = 300;
 
@@ -1248,7 +1525,7 @@ describe("PdfPreviewRenderer", () => {
     const root = documentRoot();
     Object.defineProperty(root, "clientHeight", { configurable: true, get: () => 400 });
     const setNextScrollHeight = modelScrollHeightReplacements(root, 1_000);
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     await renderer.render(new Uint8Array([1]));
     root.scrollTop = 300;
     const visiblePages = root.firstElementChild;
@@ -1285,7 +1562,7 @@ describe("PdfPreviewRenderer", () => {
       const height = Number(this.dataset.renderedHeight);
       return makeRect({ top: -root.scrollTop, width: Number(this.dataset.renderedWidth), height });
     });
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     await renderer.render(new Uint8Array([1]));
     root.scrollTop = 100;
 
@@ -1314,7 +1591,7 @@ describe("PdfPreviewRenderer", () => {
       const height = Number(this.dataset.renderedHeight);
       return makeRect({ top: -root.scrollTop, width: Number(this.dataset.renderedWidth), height });
     });
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     await renderer.render(new Uint8Array([1]));
     root.scrollTop = 500;
 
@@ -1335,7 +1612,7 @@ describe("PdfPreviewRenderer", () => {
       documentHandle([pageHandle(1)]),
     ]);
     const root = documentRoot();
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
     const rendering = renderer.render(new Uint8Array([1]));
     await vi.waitFor(() => expect(activePageRender).toHaveBeenCalledOnce());
 
@@ -1380,7 +1657,7 @@ describe("PdfPreviewRenderer", () => {
     const thirdCleanup = vi.spyOn(third, "cleanup");
     const { engine } = engineFor([pdfDocument]);
     const root = documentRoot();
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
 
     await renderer.render(new Uint8Array([1]));
     expect(getPage).toHaveBeenCalledTimes(1);
@@ -1440,7 +1717,7 @@ describe("PdfPreviewRenderer", () => {
       documentHandle([pageHandle(1), second]),
     ]);
     const root = documentRoot();
-    const renderer = new PdfPreviewRenderer(root, { engine });
+    const renderer = pdfRenderer(root, { engine });
 
     await renderer.render(new Uint8Array([1]));
     const secondElement = root.querySelector<HTMLElement>(

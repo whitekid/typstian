@@ -28,6 +28,10 @@ export const MESSAGES = {
     pageError: "Could not render PDF page.",
     retry: "Retry",
     source: "Source",
+    pageNavigation: "PDF page navigation",
+    previousPage: "Previous PDF page",
+    nextPage: "Next PDF page",
+    pageNumber: "PDF page number",
   },
   settings: {
     compilationRoot: "Compilation root",

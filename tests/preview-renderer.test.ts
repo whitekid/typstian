@@ -6,6 +6,16 @@ import { describe, expect, it, vi } from "vitest";
 import { PreviewRenderer, type PreviewRenderState } from "../src/preview-renderer";
 import { makePdfEngine } from "./fake-pdf-engine";
 
+function previewRenderer(
+  root: HTMLElement,
+  options: Omit<ConstructorParameters<typeof PreviewRenderer>[1], "toolbar"> & {
+    toolbar?: HTMLElement;
+  },
+): PreviewRenderer {
+  const toolbar = options.toolbar ?? root.ownerDocument.createElement("nav");
+  return new PreviewRenderer(root, { ...options, toolbar });
+}
+
 describe("PreviewRenderer", () => {
   it.each<[PreviewRenderState, string]>([
     [{ status: "idle" }, "Open a Typst file"],
@@ -13,7 +23,7 @@ describe("PreviewRenderer", () => {
     [{ status: "compiler-unavailable", message: "Compiler was not found" }, "Compiler was not found"]
   ])("renders the %s state", async (state, expected) => {
     const root = document.createElement("section");
-    const renderer = new PreviewRenderer(root, { pdfEngine: makePdfEngine().engine });
+    const renderer = previewRenderer(root, { pdfEngine: makePdfEngine().engine });
 
     await renderer.render(state);
 
@@ -22,7 +32,7 @@ describe("PreviewRenderer", () => {
 
   it("keeps the last PDF visible while compiling", async () => {
     const root = document.createElement("section");
-    const renderer = new PreviewRenderer(root, { pdfEngine: makePdfEngine().engine });
+    const renderer = previewRenderer(root, { pdfEngine: makePdfEngine().engine });
     await renderer.render({
       status: "ready",
       pdf: new Uint8Array([37, 80, 68, 70, 45])
@@ -38,7 +48,7 @@ describe("PreviewRenderer", () => {
   it("passes one opaque PDF artifact to the selectable PDF renderer", async () => {
     const root = document.createElement("section");
     const { engine, load } = makePdfEngine();
-    const renderer = new PreviewRenderer(root, { pdfEngine: engine });
+    const renderer = previewRenderer(root, { pdfEngine: engine });
     const pdf = new Uint8Array([37, 80, 68, 70, 45]);
 
     await renderer.render({ status: "ready", pdf });
@@ -51,7 +61,7 @@ describe("PreviewRenderer", () => {
 
   it("delegates zoom and fit while serializing the followed source", async () => {
     const root = document.createElement("section");
-    const renderer = new PreviewRenderer(root, {
+    const renderer = previewRenderer(root, {
       sourcePath: "notes/main.typ",
       pdfEngine: makePdfEngine().engine
     });
@@ -69,7 +79,7 @@ describe("PreviewRenderer", () => {
   it("renders located diagnostics as accessible navigation buttons", async () => {
     const root = document.createElement("section");
     const onDiagnostic = vi.fn();
-    const renderer = new PreviewRenderer(root, {
+    const renderer = previewRenderer(root, {
       onDiagnostic,
       pdfEngine: makePdfEngine().engine
     });
@@ -101,7 +111,7 @@ describe("PreviewRenderer", () => {
 
     vi.stubGlobal("HTMLButtonElement", class MainWindowButton {});
     const onDiagnostic = vi.fn();
-    const renderer = new PreviewRenderer(root, {
+    const renderer = previewRenderer(root, {
       onDiagnostic,
       pdfEngine: makePdfEngine().engine,
     });
@@ -132,7 +142,7 @@ describe("PreviewRenderer", () => {
   it("cleans the PDF runtime exactly once when disposed", async () => {
     const root = document.createElement("section");
     const { engine, destroy } = makePdfEngine();
-    const renderer = new PreviewRenderer(root, { pdfEngine: engine });
+    const renderer = previewRenderer(root, { pdfEngine: engine });
     await renderer.render({ status: "ready", pdf: new Uint8Array([37, 80, 68, 70, 45]) });
 
     await renderer.dispose();
@@ -148,11 +158,11 @@ describe("PreviewRenderer", () => {
     const oldEngine = makePdfEngine();
     oldEngine.destroy.mockImplementation(() => pendingDestroy);
     const root = document.createElement("section");
-    const oldRenderer = new PreviewRenderer(root, { pdfEngine: oldEngine.engine });
+    const oldRenderer = previewRenderer(root, { pdfEngine: oldEngine.engine });
     await oldRenderer.render({ status: "ready", pdf: new Uint8Array([37, 80, 68, 70, 45]) });
 
     const disposing = oldRenderer.dispose();
-    const replacement = new PreviewRenderer(root, { pdfEngine: makePdfEngine().engine });
+    const replacement = previewRenderer(root, { pdfEngine: makePdfEngine().engine });
     await replacement.render({ status: "idle" });
     finishDestroy();
     await disposing;

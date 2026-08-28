@@ -73,6 +73,9 @@ describe("TypstPreviewView", () => {
     expect(onCompiled).toHaveBeenCalledWith("book/main.typ", success());
     const page = view.contentEl.querySelector<HTMLElement>(".typst-pdf-page");
     expect(page).not.toBeNull();
+    expect(view.contentEl.querySelector(
+      '.typst-preview-toolbar [aria-label="PDF page navigation"]',
+    )).not.toBeNull();
     expect(view.contentEl.querySelector(".typst-pdf-text-layer")).not.toBeNull();
     setElementRect(page!, 600, 800);
 

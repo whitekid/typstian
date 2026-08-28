@@ -284,22 +284,24 @@ export class TypstPreviewView extends ItemView {
 
   private mountRenderer(root?: HTMLElement): void {
     const pages = root ?? this.contentEl.querySelector<HTMLElement>(".typst-preview-pages");
-    if (pages === null) return;
+    const toolbar = this.contentEl.querySelector<HTMLElement>(".typst-preview-toolbar");
+    if (pages === null || toolbar === null) return;
     this.invalidateRevision();
     this.controller?.dispose();
     void this.renderer?.dispose();
     this.renderer = new PreviewRenderer(pages, {
       ...this.state,
+      toolbar,
       onDiagnostic: this.options.onDiagnostic,
       onPoint: (point) => { void this.handlePoint(point); },
-      ...(this.options.pdfEngine === undefined ? {} : { pdfEngine: this.options.pdfEngine })
+      ...(this.options.pdfEngine === undefined ? {} : { pdfEngine: this.options.pdfEngine }),
     });
     this.controller = new PreviewController<CompilerCompileResult>({
       compile: (sourcePath, signal) => {
         const revision = ++this.nextRevision;
         return this.options.compile(sourcePath, revision, signal);
       },
-      onState: (state) => this.renderControllerState(state)
+      onState: (state) => this.renderControllerState(state),
     });
   }
 

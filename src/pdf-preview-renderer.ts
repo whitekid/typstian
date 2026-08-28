@@ -81,6 +81,7 @@ interface PdfScrollPosition {
 
 export interface PdfPreviewRendererOptions {
   engine: PdfEngine;
+  toolbar: HTMLElement;
   onPoint?: (point: PdfPreviewPoint) => void;
   pixelRatio?: number;
   zoom?: number;
@@ -175,6 +176,42 @@ private readonly resizeObserver: ResizeObserver | null;
   private resizeTimer: number | null = null;
 private pageObserver: IntersectionObserver | null = null;
 
+private readonly pageNavigation: HTMLElement;
+  private readonly previousPageButton: HTMLButtonElement;
+  private readonly nextPageButton: HTMLButtonElement;
+  private readonly pageNumberInput: HTMLInputElement;
+  private readonly pageTotal: HTMLElement;
+  private currentPage = 0;
+  private totalPages = 0;
+
+private readonly showPreviousPage = (): void => {
+    this.scrollToPage(this.currentPage - 1);
+  };
+
+  private readonly showNextPage = (): void => {
+    this.scrollToPage(this.currentPage + 1);
+  };
+
+private readonly commitPageNumber = (): void => {
+    this.scrollToPage(Number(this.pageNumberInput.value));
+  };
+
+  private readonly handlePageNumberKeydown = (event: KeyboardEvent): void => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    this.commitPageNumber();
+  };
+
+private readonly visiblePageCandidates = new Set<HTMLElement>();
+
+  private readonly handlePageScroll = (): void => {
+    const candidates = this.visiblePageCandidates.size > 0
+      ? this.visiblePageCandidates
+      : undefined;
+    const page = this.captureScrollPosition(candidates).anchor?.page;
+    if (page !== undefined) this.showPagePosition(page, this.totalPages);
+  };
+
   constructor(
     private readonly root: HTMLElement,
     options: PdfPreviewRendererOptions,
@@ -185,6 +222,38 @@ private pageObserver: IntersectionObserver | null = null;
     this.zoom = clampZoom(options.zoom ?? 1);
     this.fit = options.fit ?? false;
     this.root.classList.add("typst-pdf-preview-scroll");
+    this.root.addEventListener("scroll", this.handlePageScroll);
+
+    this.pageNavigation = options.toolbar.createSpan({
+      cls: "typst-pdf-page-navigation",
+    });
+    this.pageNavigation.setAttribute("role", "group");
+    this.pageNavigation.setAttribute("aria-label", MESSAGES.pdf.pageNavigation);
+    this.previousPageButton = this.pageNavigation.createEl("button");
+    this.previousPageButton.type = "button";
+    this.previousPageButton.textContent = "‹";
+    this.previousPageButton.title = MESSAGES.pdf.previousPage;
+    this.previousPageButton.setAttribute("aria-label", MESSAGES.pdf.previousPage);
+    this.pageNumberInput = this.pageNavigation.createEl("input");
+    this.pageNumberInput.type = "number";
+    this.pageNumberInput.min = "1";
+    this.pageNumberInput.step = "1";
+    this.pageNumberInput.inputMode = "numeric";
+    this.pageNumberInput.setAttribute("aria-label", MESSAGES.pdf.pageNumber);
+    this.pageTotal = this.pageNavigation.createSpan({
+      cls: "typst-pdf-page-total",
+    });
+    this.nextPageButton = this.pageNavigation.createEl("button");
+    this.nextPageButton.type = "button";
+    this.nextPageButton.textContent = "›";
+    this.nextPageButton.title = MESSAGES.pdf.nextPage;
+    this.nextPageButton.setAttribute("aria-label", MESSAGES.pdf.nextPage);
+    this.previousPageButton.addEventListener("click", this.showPreviousPage);
+    this.nextPageButton.addEventListener("click", this.showNextPage);
+    this.pageNumberInput.addEventListener("change", this.commitPageNumber);
+    this.pageNumberInput.addEventListener("keydown", this.handlePageNumberKeydown);
+    this.showPagePosition(0, 0);
+
     this.observedWidth = this.root.offsetWidth
       || this.root.getBoundingClientRect().width
       || this.root.clientWidth;
@@ -209,6 +278,37 @@ private pageObserver: IntersectionObserver | null = null;
         }, 75);
       });
     this.resizeObserver?.observe(this.root);
+  }
+private showPagePosition(page: number, total: number): void {
+    const valid = Number.isSafeInteger(page) && page >= 1 && page <= total;
+    this.currentPage = valid ? page : 0;
+    this.totalPages = total;
+    this.pageNumberInput.value = valid ? String(page) : "";
+    if (total > 0) {
+      this.pageNumberInput.max = String(total);
+    } else {
+      this.pageNumberInput.removeAttribute("max");
+    }
+    this.pageTotal.textContent = `/ ${total}`;
+    this.previousPageButton.disabled = !valid || page === 1;
+    this.nextPageButton.disabled = !valid || page === total;
+  }
+
+private scrollToPage(page: number): boolean {
+    if (!Number.isSafeInteger(page) || page < 1 || page > this.totalPages) {
+      this.showPagePosition(this.currentPage, this.totalPages);
+      return false;
+    }
+    const pageElement = this.root.querySelector<HTMLElement>(
+      `.typst-pdf-page[data-page="${page}"]`,
+    );
+    if (pageElement === null) {
+      this.showPagePosition(this.currentPage, this.totalPages);
+      return false;
+    }
+    pageElement.scrollIntoView?.({ block: "center" });
+    this.showPagePosition(page, this.totalPages);
+    return true;
   }
 
   async render(input: Blob | Uint8Array): Promise<void> {
@@ -318,6 +418,12 @@ private pageObserver: IntersectionObserver | null = null;
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.root.removeEventListener("scroll", this.handlePageScroll);
+    this.previousPageButton.removeEventListener("click", this.showPreviousPage);
+    this.nextPageButton.removeEventListener("click", this.showNextPage);
+    this.pageNumberInput.removeEventListener("change", this.commitPageNumber);
+    this.pageNumberInput.removeEventListener("keydown", this.handlePageNumberKeydown);
+    this.pageNavigation.remove();
     this.resizeObserver?.disconnect();
     if (this.resizeTimer !== null) {
       this.root.win.clearTimeout(this.resizeTimer);
@@ -540,6 +646,7 @@ private pageObserver: IntersectionObserver | null = null;
     this.visibleGeneration = generation;
     this.visibleRenderRequest = requestPage;
     this.root.replaceChildren(container);
+    this.showPagePosition(preferredPage, document.numPages);
     this.restoreScrollPosition(scrollPosition);
 
     const IntersectionObserverCtor =
@@ -551,11 +658,14 @@ private pageObserver: IntersectionObserver | null = null;
           const pageNumber = Number((entry.target as HTMLElement).dataset.page);
           if (!Number.isInteger(pageNumber) || pageNumber < 1) continue;
           if (entry.isIntersecting) {
+            this.visiblePageCandidates.add(entry.target as HTMLElement);
             void requestPage(pageNumber).catch(() => undefined);
-          } else if (pageNumber !== preferredPage) {
-            releasePage(pageNumber);
+          } else {
+            this.visiblePageCandidates.delete(entry.target as HTMLElement);
+            if (pageNumber !== preferredPage) releasePage(pageNumber);
           }
         }
+        this.handlePageScroll();
       }, {
         root: this.root,
         rootMargin: "200% 0px",
@@ -769,7 +879,9 @@ private pageObserver: IntersectionObserver | null = null;
     return !this.disposed && generation === this.generation;
   }
 
-  private captureScrollPosition(): PdfScrollPosition {
+  private captureScrollPosition(
+    pageElements?: Iterable<HTMLElement>,
+  ): PdfScrollPosition {
     const scrollRange = this.root.scrollHeight - this.root.clientHeight;
     const progress = scrollRange > 0
       ? Math.max(0, Math.min(1, this.root.scrollTop / scrollRange))
@@ -780,9 +892,10 @@ private pageObserver: IntersectionObserver | null = null;
     const viewportOffset = this.root.clientHeight / 2;
     const viewportY = rootRect.top + viewportOffset;
     let closest: { element: HTMLElement; rect: DOMRect; distance: number } | null = null;
-    for (const element of Array.from(
+    const elements = pageElements ?? Array.from(
       this.root.querySelectorAll<HTMLElement>(".typst-pdf-page"),
-    )) {
+    );
+    for (const element of elements) {
       const rect = element.getBoundingClientRect();
       if (!(rect.height > 0)) continue;
       const distance = viewportY < rect.top
@@ -886,6 +999,7 @@ private pageObserver: IntersectionObserver | null = null;
   private async reset(): Promise<void> {
     this.generation += 1;
     this.clearForwardMarker();
+    this.showPagePosition(0, 0);
     const destroyed = this.stopActiveWork();
     this.root.replaceChildren();
     await destroyed;
@@ -894,6 +1008,7 @@ private pageObserver: IntersectionObserver | null = null;
   private stopPageWork(): void {
     this.pageObserver?.disconnect();
     this.pageObserver = null;
+    this.visiblePageCandidates.clear();
     const pendingRemoveListeners = this.pendingRemoveListeners;
     this.pendingRemoveListeners = null;
     if (pendingRemoveListeners !== null) {

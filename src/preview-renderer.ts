@@ -17,6 +17,7 @@ export interface SerializedPreviewState {
 }
 
 export interface PreviewRendererOptions {
+  toolbar: HTMLElement;
   sourcePath?: string | null;
   zoom?: number;
   fit?: boolean;
@@ -43,16 +44,17 @@ export class PreviewRenderer {
 
   constructor(
     private readonly root: HTMLElement,
-    options: PreviewRendererOptions = {}
+    options: PreviewRendererOptions,
   ) {
     this.onDiagnostic = options.onDiagnostic;
     this.sourcePath = options.sourcePath ?? null;
     this.root.classList.add("typst-preview-scroll");
     this.pdf = new PdfPreviewRenderer(root, {
       engine: options.pdfEngine ?? createPdfJsEngine(),
+      toolbar: options.toolbar,
       onPoint: options.onPoint,
       zoom: clampPreviewZoom(options.zoom ?? 1),
-      fit: options.fit ?? false
+      fit: options.fit ?? false,
     });
   }
 

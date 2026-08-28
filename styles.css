@@ -47,6 +47,23 @@
   min-width: 2rem;
 }
 
+.typst-pdf-page-navigation {
+  display: inline-flex;
+  gap: var(--size-2-2);
+  align-items: center;
+  margin-left: auto;
+}
+
+.typst-pdf-page-navigation input {
+  width: 4rem;
+  text-align: end;
+}
+
+.typst-pdf-page-total {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .typst-preview-scroll {
   flex: 1 1 auto;
   min-height: 0;
