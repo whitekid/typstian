@@ -964,17 +964,26 @@ impl Session {
         let Some(source) = Self::retained_source(world, &request.source) else {
             return TooltipResponse::InvalidRequest { revision };
         };
-        // A retained document can only describe the exact source snapshot.
-        // Mapping a changed token onto its old bytes would show a tooltip for
-        // a different expression than the one under the user's pointer.
-        if request.source_text != source.text() {
-            return TooltipResponse::NoTooltip { revision };
-        }
+        let tooltip_cursor = if request.source_text == source.text() {
+            request.byte_offset
+        } else {
+            // A splice ending at the cursor leaves the token after it intact,
+            // but can replace the token before it. Only Side::After is safe.
+            if request.side != 1 {
+                return TooltipResponse::NoTooltip { revision };
+            }
+            let Some(mapping) =
+                CursorMapping::resolve(&request.source_text, source.text(), request.byte_offset)
+            else {
+                return TooltipResponse::NoTooltip { revision };
+            };
+            mapping.snapshot_cursor
+        };
         let Some(result) = tooltip(
             world,
             Some(document),
             &source,
-            request.byte_offset,
+            tooltip_cursor,
             side,
         ) else {
             return TooltipResponse::NoTooltip { revision };

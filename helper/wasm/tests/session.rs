@@ -495,6 +495,22 @@ fn offers_no_tooltip_when_the_hovered_token_changed_since_the_compile() {
 }
 
 #[test]
+fn maps_an_after_side_tooltip_past_an_edit_before_the_hovered_token() {
+    let source = "#let x = 1\n#x";
+    let session = tooltip_session(source, 44);
+    let live = "#let x = 1\n#/* note */x";
+    let cursor = live.len() - 1;
+
+    assert_eq!(
+        tooltip_in(&session, 44, live, cursor, 1),
+        TooltipResponse::Code {
+            revision: 44,
+            content: "1".into(),
+        }
+    );
+}
+
+#[test]
 fn offers_no_tooltip_when_the_live_buffer_diverged_away_from_the_cursor() {
     let source = "#let x = 1 + 2\n#x";
     let session = tooltip_session(source, 44);

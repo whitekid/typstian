@@ -192,6 +192,22 @@ it("loads embedded Brotli WASM without a release-side asset", { timeout: 15_000 
         content: "3",
       });
 
+      const editedSourceText = "#let x = 1 + 2\n#/* note */x";
+      const edited = (session as TypstianWasmSession & {
+        tooltip(requestJson: string): string;
+      }).tooltip(JSON.stringify({
+        revision: 2,
+        source: "main.typ",
+        sourceText: editedSourceText,
+        byteOffset: editedSourceText.length - 1,
+        side: 1,
+      }));
+      expect(JSON.parse(edited)).toEqual({
+        type: "code",
+        revision: 2,
+        content: "3",
+      });
+
       const changedSourceText = "#let x = 1 + 2\n#other";
       const changed = (session as TypstianWasmSession & {
         tooltip(requestJson: string): string;
@@ -377,6 +393,22 @@ it("embeds a Korean glyph", { timeout: 30_000 }, async () => {
         sourceText,
         byteOffset,
         side: -1,
+      })).resolves.toEqual({
+        revision: 7,
+        tooltip: { kind: "code", content: "1" },
+      });
+
+      const referenceStart = sourceText.lastIndexOf("local");
+      const inserted = "/* note */";
+      const editedSourceText = sourceText.slice(0, referenceStart)
+        + inserted
+        + sourceText.slice(referenceStart);
+      await expect(client.tooltip({
+        revision: 7,
+        source: "main.typ",
+        sourceText: editedSourceText,
+        byteOffset: referenceStart + inserted.length,
+        side: 1,
       })).resolves.toEqual({
         revision: 7,
         tooltip: { kind: "code", content: "1" },
