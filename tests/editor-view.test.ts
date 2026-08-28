@@ -325,17 +325,21 @@ describe("TypstEditorView", () => {
     expect(utf8ByteOffset("A🙂Z", 3)).toBe(5);
   });
 
-  it("ignores keyboard-only selection changes for forward search", () => {
+  it("maps a keyboard-only selection to the saved forward snapshot", () => {
     const { view, onForwardSearch } = createView();
     view.file = { path: "book/main.typ", extension: "typ" } as never;
-    view.setViewData("saved", true);
+    view.setViewData("A한🙂Z", true);
 
     view.editorView.dispatch({
-      selection: { anchor: 2 },
+      selection: { anchor: 4 },
       userEvent: "select",
     });
 
-    expect(onForwardSearch).not.toHaveBeenCalled();
+    expect(onForwardSearch).toHaveBeenCalledWith({
+      sourcePath: "book/main.typ",
+      sourceText: "A한🙂Z",
+      byteOffset: 8,
+    });
   });
 
   it("refuses forward search while the editor buffer is dirty", () => {

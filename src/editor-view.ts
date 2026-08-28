@@ -364,11 +364,11 @@ export class TypstEditorView extends TextFileView {
             this.requestSave();
           }
 
-          const pointerSelection = update.transactions.some(
-            (transaction) => transaction.isUserEvent("select.pointer"),
+          const userSelection = update.transactions.some(
+            (transaction) => transaction.isUserEvent("select"),
           );
           if (
-            !pointerSelection
+            !userSelection
             || this.file?.extension !== "typ"
             || this.dirty
           ) {
