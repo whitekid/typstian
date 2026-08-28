@@ -250,8 +250,9 @@ and embeds the result in `main.js`; Community releases contain only `main.js`,
   buffer rides on the request, so it carries its own 2 MiB bound
   (`MAX_COMPLETION_SOURCE_BYTES`, mirrored by `maxCompletionBytes` in
   `src/compiler-client.ts`) instead of the 64 KiB request cap that guards the
-  compile path. `CompletionScheduler` keeps one request in flight and only the
-  newest one queued, and a reply whose buffer changed underneath is dropped. A
+  compile path. `OptionalReadScheduler` gives completion and definition separate
+  one-in-flight, latest-queued pipelines, and a completion reply whose buffer
+  changed underneath is dropped. A
   file with no preview, or no retained document, offers nothing — completion
   must never provoke a compile. Typst's `apply` strings are snippet syntax
   (`${name}`), which is also CodeMirror's, so they go through
@@ -267,7 +268,8 @@ and embeds the result in `main.js`; Community releases contain only `main.js`,
   before bumping — a demand for a newer `view` would nest a second
   `@codemirror/state` and silently break the extension.
 - Compiler test fixtures are under `helper/tests/fixtures/`
-  (`project/`, `completion/`, `diagnostics/`, `escape/`, `fonts/`), not `tests/fixtures/`.
+  (`project/`, `completion/`, `definition/`, `diagnostics/`, `escape/`, `fonts/`),
+  not `tests/fixtures/`.
 
 ## Decisions
 
@@ -278,5 +280,5 @@ ADR before changing preview, search, or compiler integration.
 
 `docs/specs/` holds the requirements a change was accepted against, one file per
 change, written before the code: `preview-entry-points.md`,
-`font-discovery-paths.md`. An ADR records why
+`font-discovery-paths.md`, `editor-productivity.md`. An ADR records why
 an architecture is the way it is; a spec records what a change had to do.

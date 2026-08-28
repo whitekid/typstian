@@ -190,9 +190,8 @@ export class TypstPreviewView extends ItemView {
   }
 
   /**
-   * The completions the retained document holds at a cursor, or null when this
-   * preview has nothing retained. A completion never starts a compile, so a
-   * preview that has not produced a document yet simply offers nothing.
+   * Runs an optional IDE read against the retained revision, or returns null when
+   * this preview has nothing retained. Optional reads never start a compile.
    */
   private async optionalRead<T extends { revision: number }>(
     kind: OptionalReadKind,

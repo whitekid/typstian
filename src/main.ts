@@ -653,10 +653,9 @@ private handleVaultPath(vaultPath: string, includeDirectEntry = true): void {
   }
 
   /**
-   * Answers the editor with the completions the retained document holds. Every
-   * exit here is silent: an editor without a preview, or outside the
-   * compilation root, simply has nothing to offer — it must never provoke a
-   * compile or a notice.
+   * Resolves the retained preview and compiler source for an optional IDE read.
+   * Every exit is silent: an editor without a preview, or outside the compilation
+   * root, simply has nothing to offer — it must never provoke a compile or notice.
    */
   private ideReadTarget(
     editor: TypstEditorView,

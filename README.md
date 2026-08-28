@@ -134,7 +134,7 @@ comment in the installed `main.js` and recorded in
 
 ## File size and Obsidian Sync
 
-`main.js` is around 11 MB, because the Typst compiler travels inside it as a
+`main.js` is around 13 MB, because the Typst compiler travels inside it as a
 Brotli-compressed WebAssembly module instead of being downloaded at runtime.
 That is above the 5 MB per-file limit of Obsidian Sync's Standard plan, so Sync
 Standard will not carry the plugin file itself; installing from the Community
