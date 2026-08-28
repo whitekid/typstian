@@ -7,6 +7,10 @@ import { describe, expect, it } from "vitest";
 
 import { TypstianCompilerClient } from "../src/compiler-client";
 import { createPdfJsEngine } from "../src/pdfjs-adapter";
+import {
+  initSync as initTypstianWasm,
+  TypstianWasmSession,
+} from "../helper/wasm/pkg/typstian_wasm.js";
 import { createWasmEngine } from "../src/wasm-engine";
 import {
   MAX_VAULT_INPUT_FILE_BYTES,
@@ -88,7 +92,7 @@ it("loads embedded Brotli WASM without a release-side asset", { timeout: 15_000 
     }
   });
 
-it("compiles an equation with the embedded math face", { timeout: 30_000 }, async () => {
+  it("compiles an equation with the embedded math face", { timeout: 30_000 }, async () => {
     const client = new TypstianCompilerClient({
       rootPath: fixtureRoot,
       wasmPath: path.resolve("helper/wasm/pkg/typstian_wasm_bg.wasm"),
@@ -104,7 +108,52 @@ it("compiles an equation with the embedded math face", { timeout: 30_000 }, asyn
     }
   });
 
-it("resolves datetime.today() to the host's own local date", { timeout: 30_000 }, async () => {
+  it("uses all six bundled Libertinus faces from the checked-in WASM", { timeout: 30_000 }, () => {
+    initTypstianWasm({
+      module: new Uint8Array(
+        fs.readFileSync("helper/wasm/pkg/typstian_wasm_bg.wasm"),
+      ),
+    });
+    const source = new TextEncoder().encode(`Regular
+#text(style: "italic")[Italic]
+#text(weight: "bold")[Bold]
+#text(weight: "bold", style: "italic")[Bold italic]
+#text(weight: "semibold")[Semibold]
+#text(weight: "semibold", style: "italic")[Semibold italic]
+`);
+    const session = new TypstianWasmSession();
+    try {
+      const result = session.compile(
+        JSON.stringify({
+          entry: "main.typ",
+          revision: 1,
+          clock: { nowMs: 0, localOffsetMinutes: 0 },
+        }),
+        (requestedPath) => requestedPath === "main.typ" ? source : undefined,
+        () => undefined,
+        () => undefined,
+      ) as { type?: unknown; pdfBuffer?: unknown };
+      expect(result.type).toBe("compiled");
+      expect(result.pdfBuffer).toBeInstanceOf(ArrayBuffer);
+      if (!(result.pdfBuffer instanceof ArrayBuffer)) return;
+
+      const pdf = Buffer.from(result.pdfBuffer).toString("latin1");
+      for (const face of [
+        "LibertinusSerif-Regular",
+        "LibertinusSerif-Italic",
+        "LibertinusSerif-Bold",
+        "LibertinusSerif-BoldItalic",
+        "LibertinusSerif-Semibold",
+        "LibertinusSerif-SemiboldItalic",
+      ]) {
+        expect(pdf).toContain(face);
+      }
+    } finally {
+      session.free();
+    }
+  });
+
+  it("resolves datetime.today() to the host's own local date", { timeout: 30_000 }, async () => {
     const client = new TypstianCompilerClient({
       rootPath: fixtureRoot,
       wasmPath: path.resolve("helper/wasm/pkg/typstian_wasm_bg.wasm"),

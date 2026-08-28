@@ -1128,6 +1128,51 @@ mod font_tests {
         assert!(!compiled.pdf.is_empty());
         assert_eq!(loads.load(Ordering::SeqCst), 1);
     }
+
+    #[test]
+    fn embedded_libertinus_takes_priority_over_a_conflicting_system_face() {
+        let bytes = include_bytes!("../assets/LibertinusSerif-Regular.otf").to_vec();
+        let source = Bytes::from_string("Default text");
+        let loads = Arc::new(AtomicUsize::new(0));
+        let loads_for_loader = Arc::clone(&loads);
+        let font_bytes = Bytes::new(bytes.clone());
+        let catalog = Arc::new(RwLock::new(FontCatalog::default()));
+        let mut registrar = Session::with_catalog(Arc::clone(&catalog));
+        let mut session = Session::with_catalog(catalog);
+
+        assert_eq!(
+            registrar
+                .register_font("system-libertinus.otf", &bytes)
+                .unwrap(),
+            1,
+        );
+        drop(registrar);
+        let compiled = session
+            .compile_with_loader(
+                "main.typ".into(),
+                9,
+                Clock {
+                    now_ms: 0,
+                    local_offset_minutes: 0,
+                },
+                Box::new(move |path| {
+                    (path == "main.typ")
+                        .then(|| source.clone())
+                        .ok_or_else(|| FileError::NotFound(path.into()))
+                }),
+                Box::new(|key| Err(FileError::NotFound(key.into()))),
+                Arc::new(move |path| {
+                    (path == "system-libertinus.otf").then(|| {
+                        loads_for_loader.fetch_add(1, Ordering::SeqCst);
+                        font_bytes.clone()
+                    })
+                }),
+            )
+            .expect("default text compiles");
+
+        assert!(!compiled.pdf.is_empty());
+        assert_eq!(loads.load(Ordering::SeqCst), 0);
+    }
 }
 
 impl Default for TypstianWasmSession {
