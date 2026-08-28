@@ -29,10 +29,18 @@ use protocol::{
     ForwardRequest, ForwardResponse, PageDimensions, RenderedPosition,
 };
 
-/// New Computer Modern Math, Typst's default math face, vendored from
-/// typst-assets 0.15.1 under the GUST Font License. Bundling only this face
-/// keeps `main.js` far smaller than embedding the full typst-assets font set.
-const EMBEDDED_MATH_FONT: &[u8] = include_bytes!("../assets/NewCMMath-Book.otf");
+/// Typst's default text family and math face, vendored from typst-assets 0.15.1.
+/// Libertinus Serif is under the SIL Open Font License 1.1; New Computer Modern
+/// Math is under the GUST Font License.
+const EMBEDDED_FONTS: [&[u8]; 7] = [
+    include_bytes!("../assets/LibertinusSerif-Regular.otf"),
+    include_bytes!("../assets/LibertinusSerif-Italic.otf"),
+    include_bytes!("../assets/LibertinusSerif-Bold.otf"),
+    include_bytes!("../assets/LibertinusSerif-BoldItalic.otf"),
+    include_bytes!("../assets/LibertinusSerif-Semibold.otf"),
+    include_bytes!("../assets/LibertinusSerif-SemiboldItalic.otf"),
+    include_bytes!("../assets/NewCMMath-Book.otf"),
+];
 
 const PROTOCOL_VERSION: u32 = 5;
 const TYPST_VERSION: &str = "0.15.1";
@@ -196,16 +204,15 @@ impl InMemoryWorld {
         let entry = normalize_path(entry)?;
         let vpath = VirtualPath::new(entry).map_err(|error| error.to_string())?;
         let main = FileId::new(RootedPath::new(VirtualRoot::Project, vpath));
-        // Only the math face is embedded. Text faces come from the host's system
-        // fonts, which keeps the compiled module small enough to stay inside
-        // Obsidian Sync's file limit; a math face has no such fallback, because
-        // operating systems do not ship one and Typst fails the whole compile
-        // with "no font could be found" when an equation cannot be typeset.
+        // Embedded defaults lead the catalog so a matching system face cannot
+        // change the output of the same source across machines.
         let mut fonts = FontStore::new();
-        fonts.extend(Font::iter(Bytes::new(EMBEDDED_MATH_FONT)).map(|font| {
-            let info = font.info().clone();
-            (font, info)
-        }));
+        for bytes in EMBEDDED_FONTS {
+            fonts.extend(Font::iter(Bytes::new(bytes)).map(|font| {
+                let info = font.info().clone();
+                (font, info)
+            }));
+        }
         for font in registered_fonts {
             fonts.push((
                 HostFontSource {

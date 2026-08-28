@@ -16,6 +16,23 @@ const outputPath = join(projectRoot, "THIRD_PARTY_NOTICES.md");
 const checkOnly = process.argv.includes("--check");
 const legalFilePattern = /^(?:licen[cs]e|copying|notice|copyright|unlicense)(?:[._-].*)?$/i;
 
+const libertinusFaces = [
+  "Regular",
+  "Italic",
+  "Bold",
+  "BoldItalic",
+  "Semibold",
+  "SemiboldItalic",
+];
+const vendoredLibertinusNotices = libertinusFaces.map((face) => {
+  const file = `LibertinusSerif-${face}.otf`;
+  const projectPath = `helper/wasm/assets/${file}`;
+  if (!existsSync(join(projectRoot, projectPath))) {
+    throw new Error(`Vendored font is missing: ${projectPath}`);
+  }
+  return `- ${projectPath} — typst-assets 0.15.1/files/fonts/${file}`;
+});
+
 function normalizeText(value) {
   return value
     .replace(/^\uFEFF/, "")
@@ -206,6 +223,12 @@ const sections = [
   "## Typstian license",
   "",
   rootLicense,
+  "",
+  "## Vendored font assets",
+  "",
+  "Libertinus Serif is licensed under the SIL Open Font License Version 1.1.",
+  "",
+  ...vendoredLibertinusNotices,
   "",
   packageSection("Bundled npm production dependencies", npmDependencies),
   packageSection("Bundled WASM production dependencies", cargoDependencies),

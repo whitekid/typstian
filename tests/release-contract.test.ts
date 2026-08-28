@@ -290,4 +290,33 @@ describe("release contract", () => {
       expect(notices).toContain(`### ${dependency.name} ${dependency.version}`);
     }
   });
+
+  it("records the vendored Libertinus fonts without exceeding the bundle budget", () => {
+    const root = path.resolve(import.meta.dirname, "..");
+    const notices = fs.readFileSync(
+      path.join(root, "THIRD_PARTY_NOTICES.md"),
+      "utf8",
+    );
+    const faces = [
+      "Regular",
+      "Italic",
+      "Bold",
+      "BoldItalic",
+      "Semibold",
+      "SemiboldItalic",
+    ];
+
+    for (const face of faces) {
+      const file = `LibertinusSerif-${face}.otf`;
+      expect(fs.existsSync(path.join(root, "helper/wasm/assets", file))).toBe(true);
+      expect(notices).toContain(`helper/wasm/assets/${file}`);
+      expect(notices).toContain(
+        `typst-assets 0.15.1/files/fonts/${file}`,
+      );
+    }
+    expect(notices).toContain("SIL Open Font License Version 1.1");
+    expect(fs.statSync(path.join(root, "main.js")).size).toBeLessThan(
+      13_500_000,
+    );
+  });
 });

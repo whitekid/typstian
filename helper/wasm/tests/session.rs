@@ -634,3 +634,32 @@ fn rejects_documents_over_the_supported_page_height() {
         Ok(_) => panic!("document over the supported page height compiled"),
     }
 }
+
+#[test]
+fn default_text_uses_the_bundled_libertinus_serif_faces() {
+    let source = r#"
+Regular
+#text(style: "italic")[Italic]
+#text(weight: "bold")[Bold]
+#text(weight: "bold", style: "italic")[Bold italic]
+#text(weight: "semibold")[Semibold]
+#text(weight: "semibold", style: "italic")[Semibold italic]
+"#;
+    let compiled = compile_source(source).expect("default text compiles without system fonts");
+
+    assert_eq!(error_messages(&compiled), Vec::<&str>::new());
+    let pdf = base64::engine::general_purpose::STANDARD
+        .decode(compiled.pdf_base64)
+        .expect("compiler returns a base64-encoded PDF");
+    let pdf_text = String::from_utf8_lossy(&pdf);
+    for face in [
+        "LibertinusSerif-Regular",
+        "LibertinusSerif-Italic",
+        "LibertinusSerif-Bold",
+        "LibertinusSerif-BoldItalic",
+        "LibertinusSerif-Semibold",
+        "LibertinusSerif-SemiboldItalic",
+    ] {
+        assert!(pdf_text.contains(face), "PDF does not use {face}");
+    }
+}

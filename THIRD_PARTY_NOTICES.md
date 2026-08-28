@@ -30,6 +30,17 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## Vendored font assets
+
+Libertinus Serif is licensed under the SIL Open Font License Version 1.1.
+
+- helper/wasm/assets/LibertinusSerif-Regular.otf — typst-assets 0.15.1/files/fonts/LibertinusSerif-Regular.otf
+- helper/wasm/assets/LibertinusSerif-Italic.otf — typst-assets 0.15.1/files/fonts/LibertinusSerif-Italic.otf
+- helper/wasm/assets/LibertinusSerif-Bold.otf — typst-assets 0.15.1/files/fonts/LibertinusSerif-Bold.otf
+- helper/wasm/assets/LibertinusSerif-BoldItalic.otf — typst-assets 0.15.1/files/fonts/LibertinusSerif-BoldItalic.otf
+- helper/wasm/assets/LibertinusSerif-Semibold.otf — typst-assets 0.15.1/files/fonts/LibertinusSerif-Semibold.otf
+- helper/wasm/assets/LibertinusSerif-SemiboldItalic.otf — typst-assets 0.15.1/files/fonts/LibertinusSerif-SemiboldItalic.otf
+
 ## Bundled npm production dependencies
 
 ### codemirror-lang-typst 0.6.0
