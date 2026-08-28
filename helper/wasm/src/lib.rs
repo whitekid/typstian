@@ -16,8 +16,8 @@ use typst::text::{Font, FontBook, FontInfo};
 use typst::utils::LazyHash;
 use typst::{LibraryExt, World, WorldExt};
 use typst_ide::{
-    CompletionKind, Definition, IdeWorld, Jump, autocomplete, definition, jump_from_click,
-    jump_from_cursor,
+    CompletionKind, Definition, IdeWorld, Jump, Tooltip, autocomplete, definition, jump_from_click,
+    jump_from_cursor, tooltip,
 };
 use typst_kit::fonts::{FontSource, FontStore};
 use typst_layout::PagedDocument;
@@ -30,7 +30,7 @@ pub mod protocol;
 use protocol::{
     ClickRequest, ClickResponse, CompleteRequest, CompleteResponse, CompletionItem,
     DefinitionRequest, DefinitionResponse, Diagnostic, ForwardRequest, ForwardResponse,
-    PageDimensions, RenderedPosition,
+    PageDimensions, RenderedPosition, TooltipRequest, TooltipResponse,
 };
 
 /// Typst's default text family and math face, vendored from typst-assets 0.15.1.
@@ -67,6 +67,7 @@ const MAX_COMPLETIONS: usize = 8_192;
 /// bound rather than riding on the compile path's per-file limit; a Typst source
 /// a person edits by hand is orders of magnitude below this.
 const MAX_COMPLETION_SOURCE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_TOOLTIP_BYTES: usize = 64 * 1024;
 
 /// The host's wall clock at the start of a compile. The compiler has neither a
 /// clock nor a timezone database of its own, so the host samples both the
@@ -936,6 +937,61 @@ impl Session {
         }
     }
 
+
+    pub fn tooltip(&self, request: TooltipRequest) -> TooltipResponse {
+        let Some(revision) = self.revision else {
+            return TooltipResponse::InvalidRequest {
+                revision: request.revision,
+            };
+        };
+        if request.revision != revision {
+            return TooltipResponse::StaleRevision { expected: revision };
+        }
+        let (Some(world), Some(document)) = (self.world.as_ref(), self.document.as_ref()) else {
+            return TooltipResponse::InvalidRequest { revision };
+        };
+        if request.source_text.len() > MAX_COMPLETION_SOURCE_BYTES
+            || request.byte_offset > request.source_text.len()
+            || !request.source_text.is_char_boundary(request.byte_offset)
+        {
+            return TooltipResponse::InvalidRequest { revision };
+        }
+        let side = match request.side {
+            -1 => Side::Before,
+            1 => Side::After,
+            _ => return TooltipResponse::InvalidRequest { revision },
+        };
+        let Some(source) = Self::retained_source(world, &request.source) else {
+            return TooltipResponse::InvalidRequest { revision };
+        };
+        // A retained document can only describe the exact source snapshot.
+        // Mapping a changed token onto its old bytes would show a tooltip for
+        // a different expression than the one under the user's pointer.
+        if request.source_text != source.text() {
+            return TooltipResponse::NoTooltip { revision };
+        }
+        let Some(result) = tooltip(
+            world,
+            Some(document),
+            &source,
+            request.byte_offset,
+            side,
+        ) else {
+            return TooltipResponse::NoTooltip { revision };
+        };
+        match result {
+            Tooltip::Text(content) if content.len() <= MAX_TOOLTIP_BYTES => TooltipResponse::Text {
+                revision,
+                content: content.into(),
+            },
+            Tooltip::Code(content) if content.len() <= MAX_TOOLTIP_BYTES => TooltipResponse::Code {
+                revision,
+                content: content.into(),
+            },
+            Tooltip::Text(_) | Tooltip::Code(_) => TooltipResponse::NoTooltip { revision },
+        }
+    }
+
     pub fn forward(&self, request: ForwardRequest) -> ForwardResponse {
         let Some(revision) = self.revision else {
             return ForwardResponse::InvalidRequest {
@@ -1131,6 +1187,12 @@ impl TypstianWasmSession {
         let request = serde_json::from_str(request_json)
             .map_err(|error| JsValue::from_str(&format!("invalid definition request: {error}")))?;
         protocol_json(self.inner.definition(request), "definition")
+    }
+
+    pub fn tooltip(&self, request_json: &str) -> Result<String, JsValue> {
+        let request = serde_json::from_str(request_json)
+            .map_err(|error| JsValue::from_str(&format!("invalid tooltip request: {error}")))?;
+        protocol_json(self.inner.tooltip(request), "tooltip")
     }
 
     pub fn forward(&self, request_json: &str) -> Result<String, JsValue> {

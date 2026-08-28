@@ -57,6 +57,17 @@ class FakeWasmEngine implements WasmEngine {
     return this.request("definition", payload);
   }
 
+
+  tooltip(payload: {
+    revision: number;
+    source: string;
+    sourceText: string;
+    byteOffset: number;
+    side: -1 | 1;
+  }): Promise<string> {
+    return this.request("tooltip", payload);
+  }
+
   respond(response: unknown): void {
     const pending = this.pending.shift();
     if (pending === undefined) throw new Error("No pending WASM request.");
@@ -89,6 +100,7 @@ function harness(
     maxOutputBytes?: number;
     maxPdfBytes?: number;
     maxRequestBytes?: number;
+    maxCompletionBytes?: number;
     readiness?: Promise<void>;
   } = {},
 ) {
@@ -391,6 +403,228 @@ describe("TypstianCompilerClient", () => {
       revision: 31,
       location: { path: "docs/defs.typ", byteOffset: 7 },
     });
+    client.close();
+  });
+
+
+  it("preserves prose and code tooltip replies from the retained document", async () => {
+    const { client, engines } = harness();
+    const engine = await retainRevision(client, engines, 35);
+    const request = {
+      revision: 35,
+      source: "docs/main.typ",
+      sourceText: "#let value = 1\n#value",
+      byteOffset: 21,
+      side: -1 as const,
+    };
+
+    const prose = client.tooltip(request);
+    await vi.waitFor(() => expect(engine.calls.at(-1)).toEqual({
+      kind: "tooltip",
+      payload: request,
+    }));
+    engine.respond({ type: "text", revision: 35, content: "Prose" });
+    await expect(prose).resolves.toEqual({
+      revision: 35,
+      tooltip: { kind: "text", content: "Prose" },
+    });
+
+    const code = client.tooltip({ ...request, side: 1 });
+    await vi.waitFor(() => expect(engine.calls.at(-1)?.payload).toEqual({ ...request, side: 1 }));
+    engine.respond({ type: "code", revision: 35, content: "value" });
+    await expect(code).resolves.toEqual({
+      revision: 35,
+      tooltip: { kind: "code", content: "value" },
+    });
+    client.close();
+  });
+
+
+  it("returns no tooltip from the retained document", async () => {
+    const { client, engines } = harness();
+    const engine = await retainRevision(client, engines, 36);
+    const result = client.tooltip({
+      revision: 36,
+      source: "docs/main.typ",
+      sourceText: "plain",
+      byteOffset: 2,
+      side: 1,
+    });
+    await vi.waitFor(() => expect(engine.calls.at(-1)?.kind).toBe("tooltip"));
+    engine.respond({ type: "no-tooltip", revision: 36 });
+
+    await expect(result).resolves.toEqual({ revision: 36, tooltip: null });
+    client.close();
+  });
+
+  it("refuses tooltip without a retained revision before loading the engine", async () => {
+    const { client, engineFactory } = harness();
+
+    await expect(client.tooltip({
+      revision: 1,
+      source: "docs/main.typ",
+      sourceText: "#value",
+      byteOffset: 1,
+      side: -1,
+    })).rejects.toMatchObject({ code: "stale" });
+    expect(engineFactory).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it("refuses an invalid tooltip side before loading the engine", async () => {
+    const { client, engineFactory } = harness();
+
+    await expect(client.tooltip({
+      revision: 1,
+      source: "docs/main.typ",
+      sourceText: "#value",
+      byteOffset: 1,
+      side: 0 as -1,
+    })).rejects.toMatchObject({ code: "invalid-input" });
+    expect(engineFactory).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it("refuses oversized tooltip source text before loading the engine", async () => {
+    const { client, engineFactory } = harness({ maxCompletionBytes: 32 });
+
+    await expect(client.tooltip({
+      revision: 1,
+      source: "docs/main.typ",
+      sourceText: "x".repeat(33),
+      byteOffset: 1,
+      side: 1,
+    })).rejects.toMatchObject({ code: "invalid-input" });
+    expect(engineFactory).not.toHaveBeenCalled();
+    client.close();
+  });
+
+  it("rejects malformed tooltip replies without failing the retained session", async () => {
+    const { client, engines } = harness();
+    const engine = await retainRevision(client, engines, 37);
+    const request = {
+      revision: 37,
+      source: "docs/main.typ",
+      sourceText: "#value",
+      byteOffset: 1,
+      side: -1 as const,
+    };
+    const malformedReplies = [
+      { type: "unknown", revision: 37 },
+      { type: "text", revision: 38, content: "wrong revision" },
+      { type: "code", revision: 37, content: 1 },
+    ];
+
+    for (const reply of malformedReplies) {
+      const callCount = engine.calls.length;
+      const result = client.tooltip(request);
+      await vi.waitFor(() => expect(engine.calls).toHaveLength(callCount + 1));
+      engine.respond(reply);
+      await expect(result).rejects.toMatchObject({ code: "malformed-protocol" });
+    }
+    expect(engine.dispose).not.toHaveBeenCalled();
+
+    const survivorCallCount = engine.calls.length;
+    const survivor = client.tooltip(request);
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(survivorCallCount + 1));
+    engine.respond({ type: "no-tooltip", revision: 37 });
+    await expect(survivor).resolves.toEqual({ revision: 37, tooltip: null });
+    client.close();
+  });
+
+  it("rejects tooltip content above 64 KiB without failing the retained session", async () => {
+    const { client, engines } = harness();
+    const engine = await retainRevision(client, engines, 38);
+    const request = {
+      revision: 38,
+      source: "docs/main.typ",
+      sourceText: "#value",
+      byteOffset: 1,
+      side: -1 as const,
+    };
+
+    const oversized = client.tooltip(request);
+    await vi.waitFor(() => expect(engine.calls.at(-1)?.kind).toBe("tooltip"));
+    engine.respond({ type: "text", revision: 38, content: "x".repeat(64 * 1024 + 1) });
+    await expect(oversized).rejects.toMatchObject({ code: "output-limit" });
+    expect(engine.dispose).not.toHaveBeenCalled();
+
+    const survivorCallCount = engine.calls.length;
+    const survivor = client.tooltip(request);
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(survivorCallCount + 1));
+    engine.respond({ type: "code", revision: 38, content: "value" });
+    await expect(survivor).resolves.toEqual({
+      revision: 38,
+      tooltip: { kind: "code", content: "value" },
+    });
+    client.close();
+  });
+
+  it("rejects oversized tooltip output without failing the retained session", async () => {
+    const { client, engines } = harness({ maxOutputBytes: 512 });
+    const engine = await retainRevision(client, engines, 39);
+    const request = {
+      revision: 39,
+      source: "docs/main.typ",
+      sourceText: "#value",
+      byteOffset: 1,
+      side: 1 as const,
+    };
+
+    const oversized = client.tooltip(request);
+    await vi.waitFor(() => expect(engine.calls.at(-1)?.kind).toBe("tooltip"));
+    engine.respondRaw("x".repeat(513));
+    await expect(oversized).rejects.toMatchObject({ code: "output-limit" });
+    expect(engine.dispose).not.toHaveBeenCalled();
+
+    const survivorCallCount = engine.calls.length;
+    const survivor = client.tooltip(request);
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(survivorCallCount + 1));
+    engine.respond({ type: "no-tooltip", revision: 39 });
+    await expect(survivor).resolves.toEqual({ revision: 39, tooltip: null });
+    client.close();
+  });
+
+  it("rejects a stale tooltip reply without failing the retained session", async () => {
+    const { client, engines } = harness();
+    const engine = await retainRevision(client, engines, 40);
+    const request = {
+      revision: 40,
+      source: "docs/main.typ",
+      sourceText: "#value",
+      byteOffset: 1,
+      side: -1 as const,
+    };
+
+    const stale = client.tooltip(request);
+    await vi.waitFor(() => expect(engine.calls.at(-1)?.kind).toBe("tooltip"));
+    engine.respond({ type: "stale-revision", expectedRevision: 41 });
+    await expect(stale).rejects.toMatchObject({ code: "stale" });
+    expect(engine.dispose).not.toHaveBeenCalled();
+
+    const survivorCallCount = engine.calls.length;
+    const survivor = client.tooltip(request);
+    await vi.waitFor(() => expect(engine.calls).toHaveLength(survivorCallCount + 1));
+    engine.respond({ type: "no-tooltip", revision: 40 });
+    await expect(survivor).resolves.toEqual({ revision: 40, tooltip: null });
+    client.close();
+  });
+
+  it("fails the retained session when the tooltip engine call crashes", async () => {
+    const { client, engines } = harness();
+    const engine = await retainRevision(client, engines, 41);
+    const result = client.tooltip({
+      revision: 41,
+      source: "docs/main.typ",
+      sourceText: "#value",
+      byteOffset: 1,
+      side: -1,
+    });
+    await vi.waitFor(() => expect(engine.calls.at(-1)?.kind).toBe("tooltip"));
+    engine.fail(new Error("worker crashed"));
+
+    await expect(result).rejects.toMatchObject({ code: "crash" });
+    expect(engine.dispose).toHaveBeenCalledOnce();
     client.close();
   });
 

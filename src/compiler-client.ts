@@ -11,6 +11,8 @@ const DEFAULT_MAX_REQUEST_BYTES = 64 * 1024;
 // fit the request cap that guards the compile path. It gets its own bound,
 // matching the compiler's, rather than travelling unbounded.
 const DEFAULT_MAX_COMPLETION_BYTES = 2 * 1024 * 1024;
+
+const MAX_TOOLTIP_BYTES = 64 * 1024;
 const MAX_PAGES = 1_000;
 const MAX_DEPENDENCIES = 10_000;
 const MAX_DIAGNOSTICS = 1_000;
@@ -66,6 +68,13 @@ export interface WasmEngine {
     source: string;
     sourceText: string;
     byteOffset: number;
+  }): Promise<string>;
+  tooltip(request: {
+    revision: number;
+    source: string;
+    sourceText: string;
+    byteOffset: number;
+    side: -1 | 1;
   }): Promise<string>;
   dispose(): void;
 }
@@ -213,13 +222,29 @@ export interface CompilerDefinitionResult {
   location: { path: string; byteOffset: number } | null;
 }
 
+
+export interface CompilerTooltipRequest {
+  revision: number;
+  source: string;
+  sourceText: string;
+  byteOffset: number;
+  side: -1 | 1;
+  signal?: AbortSignal;
+}
+
+export interface CompilerTooltipResult {
+  revision: number;
+  tooltip: { kind: "text" | "code"; content: string } | null;
+}
+
 export type RequestKind =
   | "environment"
   | "compile"
   | "jump"
   | "forward"
   | "complete"
-  | "definition";
+  | "definition"
+  | "tooltip";
 
 interface PendingRequest<T = unknown> {
   kind: RequestKind;
@@ -564,6 +589,31 @@ function parseDefinition(value: unknown, revision: number): CompilerDefinitionRe
   };
 }
 
+
+function parseTooltip(value: unknown, revision: number): CompilerTooltipResult {
+  const response = requireRecord(value, "tooltip response");
+  if (response.type === "error") throw transportError(parseError(response, "tooltip", revision));
+  if (response.type === "stale-revision") {
+    requireInteger(response.expectedRevision, "expected revision");
+    throw new CompilerClientError("stale", COMPILER_CLIENT_ERROR.previewRevisionInactive);
+  }
+  if (response.revision !== revision) {
+    throw malformed(COMPILER_CLIENT_ERROR.wrongTooltipRevision);
+  }
+  if (response.type === "no-tooltip") return { revision, tooltip: null };
+  if (response.type !== "text" && response.type !== "code") {
+    throw malformed(COMPILER_CLIENT_ERROR.wrongTooltipResponse);
+  }
+  const content = requireString(response.content, "tooltip content");
+  if (Buffer.byteLength(content) > MAX_TOOLTIP_BYTES) {
+    throw new CompilerClientError("output-limit", COMPILER_CLIENT_ERROR.tooltipTooLarge);
+  }
+  return {
+    revision,
+    tooltip: { kind: response.type, content },
+  };
+}
+
 function requirePositiveOption(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.positiveInteger(label));
@@ -804,6 +854,43 @@ export class TypstianCompilerClient {
     );
   }
 
+
+  tooltip(request: CompilerTooltipRequest): Promise<CompilerTooltipResult> {
+    try {
+      validateRevision(request.revision);
+      validateVaultPath(request.source, "Tooltip source");
+      if (!Number.isSafeInteger(request.byteOffset) || request.byteOffset < 0) {
+        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.tooltipByteOffsetInvalid);
+      }
+      if (request.side !== -1 && request.side !== 1) {
+        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.tooltipSideInvalid);
+      }
+      if (
+        typeof request.sourceText !== "string"
+        || Buffer.byteLength(request.sourceText) > this.maxCompletionBytes
+      ) {
+        throw new CompilerClientError("invalid-input", COMPILER_CLIENT_ERROR.tooltipSourceTooLarge);
+      }
+    } catch (error) {
+      return Promise.reject(asClientError(error, "invalid-input", COMPILER_CLIENT_ERROR.tooltipRequestInvalid));
+    }
+    if (request.revision !== this.latestDocumentRevision) {
+      return Promise.reject(new CompilerClientError("stale", COMPILER_CLIENT_ERROR.previewRevisionInactive));
+    }
+    return this.enqueue(
+      "tooltip",
+      {
+        revision: request.revision,
+        source: request.source,
+        sourceText: request.sourceText,
+        byteOffset: request.byteOffset,
+        side: request.side,
+      },
+      (response) => parseTooltip(response, request.revision),
+      request.signal,
+    );
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -828,7 +915,7 @@ export class TypstianCompilerClient {
     }
 
     const encodedRequest = JSON.stringify(payload);
-    const requestLimit = kind === "complete" || kind === "definition"
+    const requestLimit = kind === "complete" || kind === "definition" || kind === "tooltip"
       ? this.maxCompletionBytes
       : this.maxRequestBytes;
     if (Buffer.byteLength(encodedRequest) > requestLimit) {
@@ -921,6 +1008,7 @@ export class TypstianCompilerClient {
             if (
               kind !== "complete"
               && kind !== "definition"
+              && kind !== "tooltip"
               && (clientError.code === "malformed-protocol"
                 || clientError.code === "output-limit")
             ) {
@@ -1041,6 +1129,16 @@ export class TypstianCompilerClient {
             source: string;
             sourceText: string;
             byteOffset: number;
+          },
+        );
+      case "tooltip":
+        return engine.tooltip(
+          payload as {
+            revision: number;
+            source: string;
+            sourceText: string;
+            byteOffset: number;
+            side: -1 | 1;
           },
         );
     }

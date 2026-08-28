@@ -31,7 +31,9 @@ import {
   type TypstCompletionRequest,
   type TypstCompletionResponse,
   type TypstDefinitionRequest,
-  type TypstForwardSearchRequest
+  type TypstForwardSearchRequest,
+  type TypstTooltipRequest,
+  type TypstTooltipResponse
 } from "./editor-view";
 import {
   CompilerClientError,
@@ -96,6 +98,7 @@ export default class TypstianPlugin extends Plugin {
     { editor: TypstEditorView; request: TypstDefinitionRequest },
     void
   >(({ editor, request }, isCurrent) => this.handleDefinition(editor, request, isCurrent));
+  private tooltipGeneration = 0;
   private readonly sourceNavigationScheduler =
     new SourceNavigationScheduler<TypstSourceLocation>(
       (location, isCurrent) => this.performRevealSourceLocation(location, isCurrent)
@@ -248,6 +251,7 @@ export default class TypstianPlugin extends Plugin {
     this.forwardSearchScheduler.dispose();
     this.completionScheduler.dispose();
     this.definitionScheduler.dispose();
+    this.tooltipGeneration += 1;
     this.sourceNavigationScheduler.dispose();
     for (const compiler of this.compilers) compiler.close();
     this.compilers.clear();
@@ -292,9 +296,9 @@ export default class TypstianPlugin extends Plugin {
       // that arrives after another keystroke would point at a moved cursor.
       onComplete: (request): Promise<TypstCompletionResponse | null> =>
         this.completionScheduler.schedule(
-        { editor: view, request },
-        () => !this.unloaded && view.getViewData() === request.sourceText
-      ),
+          { editor: view, request },
+          () => !this.unloaded && view.getViewData() === request.sourceText,
+        ),
       onDefinition: async (request) => {
         await this.definitionScheduler.schedule(
           { editor: view, request },
@@ -304,10 +308,22 @@ export default class TypstianPlugin extends Plugin {
             && view.getViewData() === request.sourceText,
         );
       },
+      onTooltip: (request): Promise<TypstTooltipResponse | null> => {
+        const generation = ++this.tooltipGeneration;
+        return this.handleTooltip(
+          view,
+          request,
+          () => generation === this.tooltipGeneration
+            && !this.unloaded
+            && !view.isClosed()
+            && view.file?.path === request.sourcePath
+            && view.getViewData() === request.sourceText,
+        );
+      },
       onClose: () => {
         this.forwardSearchScheduler.cancel(view);
       },
-      onOpenPreview: (sourcePath) => { void this.openPreview(sourcePath); }
+      onOpenPreview: (sourcePath) => { void this.openPreview(sourcePath); },
     });
     return view;
   }
@@ -368,6 +384,7 @@ export default class TypstianPlugin extends Plugin {
       forward: (request) => getCompiler().forward(request),
       complete: (request) => getCompiler().complete(request),
       definition: (request) => getCompiler().definition(request),
+      tooltip: (request) => getCompiler().tooltip(request),
       onCompiled: (sourcePath, result) => {
         this.recordDependencies(sourcePath, result);
         this.publishDiagnostics(result);
@@ -669,6 +686,41 @@ private handleVaultPath(vaultPath: string, includeDirectEntry = true): void {
     return result === null
       ? null
       : { byteOffset: result.byteOffset, completions: result.completions };
+  }
+
+
+  private async handleTooltip(
+    editor: TypstEditorView,
+    request: TypstTooltipRequest,
+    isCurrent: () => boolean,
+  ): Promise<TypstTooltipResponse | null> {
+    if (
+      !isCurrent()
+      || editor.file?.path !== request.sourcePath
+      || editor.getViewData() !== request.sourceText
+    ) {
+      return null;
+    }
+
+    const preview = this.previewForSource(request.sourcePath);
+    if (preview === undefined || !isCurrent()) return null;
+
+    const vaultRoot = this.vaultRoot();
+    const compilerSource = resolveCompilerEntryPath(
+      vaultRoot,
+      this.compilationRoot(vaultRoot),
+      request.sourcePath,
+    );
+    if (compilerSource === null || !isCurrent()) return null;
+
+    const result = await preview.tooltip(
+      compilerSource,
+      request.sourceText,
+      request.byteOffset,
+      request.side,
+      isCurrent,
+    );
+    return isCurrent() ? result : null;
   }
 
 

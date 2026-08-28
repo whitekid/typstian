@@ -166,6 +166,17 @@ class InlineWasmEngine implements WasmEngine {
     return (await this.requireSession()).definition(JSON.stringify(request));
   }
 
+
+  async tooltip(request: {
+    revision: number;
+    source: string;
+    sourceText: string;
+    byteOffset: number;
+    side: -1 | 1;
+  }): Promise<string> {
+    return (await this.requireSession()).tooltip(JSON.stringify(request));
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -303,6 +314,18 @@ class WorkerWasmEngine implements WasmEngine {
   }): Promise<string> {
     await this.initialization;
     return this.request<string>("definition", request);
+  }
+
+
+  async tooltip(request: {
+    revision: number;
+    source: string;
+    sourceText: string;
+    byteOffset: number;
+    side: -1 | 1;
+  }): Promise<string> {
+    await this.initialization;
+    return this.request<string>("tooltip", request);
   }
 
   dispose(): void {

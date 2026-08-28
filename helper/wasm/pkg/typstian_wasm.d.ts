@@ -14,6 +14,7 @@ export class TypstianWasmSession {
     jump(request_json: string): string;
     constructor();
     register_font(path: string, bytes: Uint8Array): number;
+    tooltip(request_json: string): string;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -29,6 +30,7 @@ export interface InitOutput {
     readonly typstianwasmsession_jump: (a: number, b: number, c: number, d: number) => void;
     readonly typstianwasmsession_new: () => number;
     readonly typstianwasmsession_register_font: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly typstianwasmsession_tooltip: (a: number, b: number, c: number, d: number) => void;
     readonly __wbindgen_export: (a: number) => void;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
     readonly __wbindgen_export2: (a: number, b: number) => number;

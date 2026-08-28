@@ -14,7 +14,8 @@ type WorkerMethod =
   | "jump"
   | "forward"
   | "complete"
-  | "definition";
+  | "definition"
+  | "tooltip";
 
 interface WorkerRequest {
   type: "request";
@@ -200,6 +201,9 @@ async function dispatch(
   }
   if (method === "definition") {
     return { value: boundedOutput(activeSession.definition(JSON.stringify(payload))) };
+  }
+  if (method === "tooltip") {
+    return { value: boundedOutput(activeSession.tooltip(JSON.stringify(payload))) };
   }
   return compile(activeSession, payload as { revision: number; entryPath: string });
 }

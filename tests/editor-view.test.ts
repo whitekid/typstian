@@ -69,6 +69,103 @@ describe("TypstEditorView", () => {
     await view.onClose();
   });
 
+
+  it("renders prose and code hover tooltips as owning-document text nodes", async () => {
+    const onTooltip = vi.fn()
+      .mockResolvedValueOnce({ kind: "text", content: "<img src=x onerror=alert(1)>" })
+      .mockResolvedValueOnce({ kind: "code", content: "#let x = 1" });
+    const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+    const view = new TypstEditorView(leaf, { onTooltip });
+    view.file = { path: "book/main.typ", extension: "typ" } as never;
+    view.setViewData("café #x", true);
+    const popoutDocument = document.implementation.createHTMLDocument("popout");
+    popoutDocument.body.appendChild(view.contentEl);
+
+    const prose = await view.tooltipAt(7, -1);
+    expect(onTooltip).toHaveBeenLastCalledWith({
+      sourcePath: "book/main.typ",
+      sourceText: "café #x",
+      byteOffset: 8,
+      side: -1,
+    });
+    const proseDom = prose?.create(view.editorView).dom;
+    expect(proseDom?.ownerDocument).toBe(popoutDocument);
+    expect(proseDom?.tagName).toBe("DIV");
+    expect(proseDom?.textContent).toBe("<img src=x onerror=alert(1)>");
+    expect(proseDom?.querySelector("img")).toBeNull();
+
+    const code = await view.tooltipAt(7, 1);
+    const codeDom = code?.create(view.editorView).dom;
+    expect(codeDom?.ownerDocument).toBe(popoutDocument);
+    expect(codeDom?.tagName).toBe("CODE");
+    expect(codeDom?.textContent).toBe("#let x = 1");
+    view.editorView.destroy();
+  });
+
+  it("hides a rendered tooltip when the document changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const onTooltip = vi.fn().mockResolvedValue({ kind: "text", content: "old value" });
+      const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+      const view = new TypstEditorView(leaf, { onTooltip });
+      document.body.appendChild(view.contentEl);
+      view.file = { path: "book/main.typ", extension: "typ" } as never;
+      view.setViewData("#value", true);
+      vi.spyOn(view.editorView, "posAtCoords").mockReturnValue(1);
+      vi.spyOn(view.editorView, "coordsAtPos").mockReturnValue({
+        left: 10,
+        right: 10,
+        top: 0,
+        bottom: 20,
+      });
+
+      view.editorView.contentDOM.querySelector(".cm-line")?.dispatchEvent(new MouseEvent("mousemove", {
+        bubbles: true,
+        clientX: 10,
+        clientY: 10,
+      }));
+      await vi.advanceTimersByTimeAsync(400);
+      expect(document.querySelector(".cm-tooltip")?.textContent).toContain("old value");
+
+      view.editorView.dispatch({ changes: { from: 0, insert: "X" } });
+
+      expect(document.querySelector(".cm-tooltip")).toBeNull();
+      view.editorView.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not request a tooltip for a non-Typst file", async () => {
+    const onTooltip = vi.fn();
+    const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+    const view = new TypstEditorView(leaf, { onTooltip });
+    view.file = { path: "book/notes.md", extension: "md" } as never;
+    view.setViewData("#value", true);
+
+    await expect(view.tooltipAt(1, 1)).resolves.toBeNull();
+    expect(onTooltip).not.toHaveBeenCalled();
+    view.editorView.destroy();
+  });
+
+  it("drops a tooltip reply after the live source changes", async () => {
+    let resolveTooltip!: (value: { kind: "text"; content: string }) => void;
+    const onTooltip = vi.fn(() => new Promise<{ kind: "text"; content: string }>((resolve) => {
+      resolveTooltip = resolve;
+    }));
+    const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+    const view = new TypstEditorView(leaf, { onTooltip });
+    view.file = { path: "book/main.typ", extension: "typ" } as never;
+    view.setViewData("#value", true);
+
+    const tooltip = view.tooltipAt(1, 1);
+    view.editorView.dispatch({ changes: { from: 0, insert: "X" } });
+    resolveTooltip({ kind: "text", content: "stale" });
+
+    await expect(tooltip).resolves.toBeNull();
+    view.editorView.destroy();
+  });
+
   it("uses Meta-click on macOS and Control-click on other platforms", async () => {
     const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
     const macDefinition = vi.fn().mockResolvedValue(undefined);

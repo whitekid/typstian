@@ -21,8 +21,10 @@ import {
   highlightActiveLine,
   highlightActiveLineGutter,
   highlightSpecialChars,
+  hoverTooltip,
   keymap,
   lineNumbers,
+  type Tooltip,
 } from "@codemirror/view";
 import { Platform, TextFileView, type WorkspaceLeaf } from "obsidian";
 
@@ -39,6 +41,16 @@ export interface TypstForwardSearchRequest {
 }
 
 export type TypstDefinitionRequest = TypstForwardSearchRequest;
+
+
+export interface TypstTooltipRequest extends TypstForwardSearchRequest {
+  side: -1 | 1;
+}
+
+export interface TypstTooltipResponse {
+  kind: "text" | "code";
+  content: string;
+}
 
 export interface TypstCompletionRequest {
   sourcePath: string;
@@ -66,6 +78,7 @@ export interface TypstEditorViewOptions {
     request: TypstCompletionRequest,
   ) => Promise<TypstCompletionResponse | null>;
   onDefinition?: (request: TypstDefinitionRequest) => void | Promise<void>;
+  onTooltip?: (request: TypstTooltipRequest) => Promise<TypstTooltipResponse | null>;
   onClose?: () => void;
   onOpenPreview?: (sourcePath: string) => void;
   isMacOS?: boolean;
@@ -164,6 +177,9 @@ export class TypstEditorView extends TextFileView {
     request: TypstCompletionRequest,
   ) => Promise<TypstCompletionResponse | null>;
   private readonly onDefinition: (request: TypstDefinitionRequest) => void | Promise<void>;
+  private readonly onTooltip: (
+    request: TypstTooltipRequest,
+  ) => Promise<TypstTooltipResponse | null>;
   private readonly onClosed: () => void;
   private readonly isMacOS: boolean;
   private dirty = false;
@@ -175,6 +191,7 @@ export class TypstEditorView extends TextFileView {
     this.onForwardSearch = options.onForwardSearch ?? (() => undefined);
     this.onComplete = options.onComplete ?? (() => Promise.resolve(null));
     this.onDefinition = options.onDefinition ?? (() => undefined);
+    this.onTooltip = options.onTooltip ?? (() => Promise.resolve(null));
     this.onClosed = options.onClose ?? (() => undefined);
     this.isMacOS = options.isMacOS ?? Platform.isMacOS;
     const onOpenPreview = options.onOpenPreview;
@@ -305,6 +322,58 @@ export class TypstEditorView extends TextFileView {
   }
 
 
+  async tooltipAt(position: number, side: -1 | 1): Promise<Tooltip | null> {
+    const file = this.file;
+    if (
+      this.closed
+      || file?.extension !== "typ"
+      || !Number.isSafeInteger(position)
+      || position < 0
+      || position > this.editorView.state.doc.length
+    ) {
+      return null;
+    }
+
+    const sourcePath = file.path;
+    const sourceText = this.editorView.state.doc.toString();
+    const byteOffset = utf8ByteOffset(sourceText, position);
+    if (byteOffset === null) return null;
+    const editGeneration = this.editGeneration;
+
+    try {
+      const result = await this.onTooltip({
+        sourcePath,
+        sourceText,
+        byteOffset,
+        side,
+      });
+      if (
+        result === null
+        || this.closed
+        || this.file?.path !== sourcePath
+        || this.editGeneration !== editGeneration
+        || this.editorView.state.doc.toString() !== sourceText
+      ) {
+        return null;
+      }
+
+      return {
+        pos: position,
+        create: () => {
+          const tooltipHost = this.contentEl.cloneNode();
+          const dom = tooltipHost.createEl(
+            result.kind === "code" ? "code" : "div",
+          );
+          dom.textContent = result.content;
+          return { dom };
+        },
+      };
+    } catch {
+      return null;
+    }
+  }
+
+
   isClosed(): boolean {
     return this.closed;
   }
@@ -381,6 +450,10 @@ export class TypstEditorView extends TextFileView {
       extensions: [
         editorExtensions,
         autocompletion({ override: [this.completionSource] }),
+        hoverTooltip(
+          (_view, position, side) => this.tooltipAt(position, side),
+          { hideOnChange: true },
+        ),
         EditorView.domEventHandlers({
           click: (event, view) => {
             const primaryModifier = this.isMacOS ? event.metaKey : event.ctrlKey;

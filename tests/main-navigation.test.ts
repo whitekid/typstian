@@ -908,6 +908,159 @@ describe("TypstianPlugin completion routing", () => {
   });
 });
 
+describe("TypstianPlugin tooltip routing", () => {
+  interface TooltipInternals {
+    handleTooltip(
+      editor: TypstEditorView,
+      request: {
+        sourcePath: string;
+        sourceText: string;
+        byteOffset: number;
+        side: -1 | 1;
+      },
+      isCurrent: () => boolean,
+    ): Promise<{ kind: "text" | "code"; content: string } | null>;
+  }
+
+  it("asks only the preview that owns the hovered source", async () => {
+    const { internals, plugin } = harness([]);
+    const unrelated = {
+      getSourcePath: vi.fn(() => "other/doc.typ"),
+      tooltip: vi.fn(),
+    };
+    const owning = {
+      getSourcePath: vi.fn(() => "book/main.typ"),
+      tooltip: vi.fn().mockResolvedValue({ kind: "code", content: "1" }),
+    };
+    vi.spyOn(internals, "previewViews").mockReturnValue([unrelated, owning] as never);
+    const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+    const editor = new TypstEditorView(leaf);
+    editor.file = fileAt("book/main.typ");
+    editor.setViewData("#let x = 1\n#x", true);
+    await plugin.onload();
+
+    const result = await (plugin as unknown as TooltipInternals).handleTooltip(
+      editor,
+      {
+        sourcePath: "book/main.typ",
+        sourceText: "#let x = 1\n#x",
+        byteOffset: 13,
+        side: -1,
+      },
+      () => true,
+    );
+
+    expect(unrelated.tooltip).not.toHaveBeenCalled();
+    expect(owning.tooltip).toHaveBeenCalledWith(
+      "book/main.typ",
+      "#let x = 1\n#x",
+      13,
+      -1,
+      expect.any(Function),
+    );
+    expect(result).toEqual({ kind: "code", content: "1" });
+    plugin.onunload();
+  });
+
+  it("does not create a compiler when no preview owns the source", async () => {
+    const { internals, plugin } = harness([]);
+    vi.spyOn(internals, "previewViews").mockReturnValue([]);
+    const createCompiler = vi.spyOn(
+      plugin as unknown as { createCompilerClient(): unknown },
+      "createCompilerClient",
+    );
+    const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+    const editor = new TypstEditorView(leaf);
+    editor.file = fileAt("book/main.typ");
+    editor.setViewData("#value", true);
+    await plugin.onload();
+
+    await expect((plugin as unknown as TooltipInternals).handleTooltip(
+      editor,
+      {
+        sourcePath: "book/main.typ",
+        sourceText: "#value",
+        byteOffset: 1,
+        side: 1,
+      },
+      () => true,
+    )).resolves.toBeNull();
+    expect(createCompiler).not.toHaveBeenCalled();
+    plugin.onunload();
+  });
+
+
+  it("drops an older tooltip when a newer hover position arrives", async () => {
+    const { internals, plugin, viewFactories } = harness([]);
+    let resolveFirst!: (value: { kind: "text"; content: string }) => void;
+    const firstResult = new Promise<{ kind: "text"; content: string }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const owning = {
+      getSourcePath: vi.fn(() => "book/main.typ"),
+      tooltip: vi.fn()
+        .mockImplementationOnce(() => firstResult)
+        .mockResolvedValue({ kind: "code", content: "new" }),
+    };
+    vi.spyOn(internals, "previewViews").mockReturnValue([owning] as never);
+    await plugin.onload();
+    const factory = viewFactories.get(TYPST_VIEW_TYPE);
+    if (factory === undefined) throw new Error("Typst editor view factory was not registered.");
+    const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+    const editor = factory(leaf);
+    if (!(editor instanceof TypstEditorView)) throw new Error("Typst editor was not created.");
+    editor.file = fileAt("book/main.typ");
+    editor.setViewData("#value", true);
+
+    const stale = editor.tooltipAt(1, 1);
+    await vi.waitFor(() => expect(owning.tooltip).toHaveBeenCalledOnce());
+    const latest = editor.tooltipAt(2, 1);
+    await vi.waitFor(() => expect(owning.tooltip).toHaveBeenCalledTimes(2));
+    resolveFirst({ kind: "text", content: "old" });
+
+    await expect(stale).resolves.toBeNull();
+    const tooltip = await latest;
+    expect(tooltip?.create(editor.editorView).dom.textContent).toBe("new");
+    await editor.onClose();
+    plugin.onunload();
+  });
+
+  it("does not let a tooltip supersede definition scheduling", async () => {
+    const { internals, plugin, viewFactories } = harness([]);
+    let resolveTooltip!: (value: { kind: "text"; content: string }) => void;
+    const tooltipResult = new Promise<{ kind: "text"; content: string }>((resolve) => {
+      resolveTooltip = resolve;
+    });
+    const owning = {
+      getSourcePath: vi.fn(() => "book/main.typ"),
+      tooltip: vi.fn(() => tooltipResult),
+      definition: vi.fn().mockResolvedValue({ path: "book/defs.typ", byteOffset: 9 }),
+    };
+    vi.spyOn(internals, "previewViews").mockReturnValue([owning] as never);
+    const reveal = vi.spyOn(internals, "revealSourceLocation").mockResolvedValue(undefined);
+    await plugin.onload();
+    const factory = viewFactories.get(TYPST_VIEW_TYPE);
+    if (factory === undefined) throw new Error("Typst editor view factory was not registered.");
+    const leaf = { app: { vault: { modify: vi.fn() } } } as unknown as WorkspaceLeaf;
+    const editor = factory(leaf);
+    if (!(editor instanceof TypstEditorView)) throw new Error("Typst editor was not created.");
+    editor.file = fileAt("book/main.typ");
+    editor.setViewData("#value", true);
+
+    const tooltip = editor.tooltipAt(1, 1);
+    await vi.waitFor(() => expect(owning.tooltip).toHaveBeenCalledOnce());
+    const definition = editor.goToDefinition();
+    await vi.waitFor(() => expect(owning.definition).toHaveBeenCalledOnce());
+    await definition;
+    expect(reveal).toHaveBeenCalledOnce();
+
+    resolveTooltip({ kind: "text", content: "value" });
+    await expect(tooltip).resolves.not.toBeNull();
+    await editor.onClose();
+    plugin.onunload();
+  });
+});
+
 describe("TypstianPlugin definition routing", () => {
   it("asks only the owning preview and reuses safe source navigation", async () => {
     const { internals, plugin } = harness([]);

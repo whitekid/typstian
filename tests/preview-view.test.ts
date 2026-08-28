@@ -63,6 +63,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: () => undefined
     });
     await view.setState({ sourcePath: "book/main.typ", zoom: 2, fit: true }, {} as never);
@@ -136,6 +137,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: vi.fn()
     });
     await view.setState({ sourcePath: "book/main.typ" }, {} as never);
@@ -180,6 +182,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: vi.fn(),
     });
     await view.setState({ sourcePath: "book/main.typ" }, {} as never);
@@ -243,6 +246,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: vi.fn()
     });
     await view.setState({ sourcePath: "book/main.typ", zoom: 2 }, {} as never);
@@ -295,6 +299,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: vi.fn()
     });
     await view.setState({ sourcePath: "book/main.typ" }, {} as never);
@@ -342,6 +347,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: vi.fn()
     });
     await view.setState({ sourcePath: "book/main.typ", zoom: 2 }, {} as never);
@@ -379,6 +385,7 @@ describe("TypstPreviewView", () => {
       forward: vi.fn(),
       complete: vi.fn(),
       definition,
+      tooltip: vi.fn(),
       onSourceLocation: vi.fn(),
       onCompiled: vi.fn(),
       onDiagnostic: vi.fn(),
@@ -395,6 +402,49 @@ describe("TypstPreviewView", () => {
     resolveDefinition({
       revision: 1,
       location: { path: "book/main.typ", byteOffset: 5 },
+    });
+
+    await expect(pending).resolves.toBeNull();
+    await view.close();
+  });
+
+
+  it("drops a tooltip after its retained revision becomes inactive", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({} as CanvasRenderingContext2D);
+    const { engine } = makePdfEngine(1);
+    let resolveTooltip!: (result: {
+      revision: number;
+      tooltip: { kind: "text"; content: string } | null;
+    }) => void;
+    const tooltip = vi.fn(() => new Promise<{
+      revision: number;
+      tooltip: { kind: "text"; content: string } | null;
+    }>((resolve) => { resolveTooltip = resolve; }));
+    const view = new TestPreviewView({} as WorkspaceLeaf, {
+      compile: vi.fn().mockResolvedValue(success()),
+      jump: vi.fn(),
+      forward: vi.fn(),
+      complete: vi.fn(),
+      definition: vi.fn(),
+      tooltip,
+      onSourceLocation: vi.fn(),
+      onCompiled: vi.fn(),
+      onDiagnostic: vi.fn(),
+      disposeBackend: vi.fn(),
+      pdfEngine: engine,
+      requestSaveLayout: vi.fn(),
+    });
+    await view.setState({ sourcePath: "book/main.typ" }, {} as never);
+    await view.open();
+    await vi.advanceTimersByTimeAsync(300);
+
+    const pending = view.tooltip("book/main.typ", "#let x = 1\n#x", 13, -1);
+    view.markDirty();
+    resolveTooltip({
+      revision: 1,
+      tooltip: { kind: "text", content: "stale" },
     });
 
     await expect(pending).resolves.toBeNull();
@@ -418,6 +468,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: vi.fn()
     });
     await view.setState({ sourcePath: "book/main.typ" }, {} as never);
@@ -471,6 +522,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: vi.fn(),
     });
     await view.setState({ sourcePath: "book/main.typ" }, {} as never);
@@ -520,6 +572,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: vi.fn(),
     });
     await view.setState({ sourcePath: "book/main.typ" }, {} as never);
@@ -570,6 +623,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: makePdfEngine().engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: () => undefined
     });
     await view.setState({ sourcePath: "book/main.typ" }, {} as never);
@@ -598,6 +652,7 @@ describe("TypstPreviewView", () => {
       pdfEngine: makePdfEngine().engine,
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       requestSaveLayout: vi.fn()
     });
     await view.setState({ sourcePath: "book/main.typ" }, {} as never);
@@ -623,6 +678,7 @@ describe("TypstPreviewView", () => {
       forward: vi.fn(),
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       onSourceLocation: vi.fn(),
       onCompiled: vi.fn(),
       onDiagnostic: vi.fn(),
@@ -654,6 +710,7 @@ describe("TypstPreviewView", () => {
       forward: vi.fn(),
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       onSourceLocation: vi.fn(),
       onCompiled: vi.fn(),
       onDiagnostic: vi.fn(),
@@ -684,6 +741,7 @@ describe("TypstPreviewView", () => {
       forward: vi.fn(),
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       onSourceLocation: vi.fn(),
       onCompiled: vi.fn(),
       onDiagnostic: vi.fn(),
@@ -724,6 +782,7 @@ describe("TypstPreviewView", () => {
       forward: vi.fn(),
       complete: vi.fn(),
       definition: vi.fn(),
+      tooltip: vi.fn(),
       onSourceLocation: vi.fn(),
       onCompiled: vi.fn(),
       onDiagnostic: vi.fn(),

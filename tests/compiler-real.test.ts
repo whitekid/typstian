@@ -153,6 +153,64 @@ it("loads embedded Brotli WASM without a release-side asset", { timeout: 15_000 
     }
   });
 
+
+  it("answers a tooltip from the checked-in retained WASM session", () => {
+    initTypstianWasm({
+      module: new Uint8Array(
+        fs.readFileSync("helper/wasm/pkg/typstian_wasm_bg.wasm"),
+      ),
+    });
+    const sourceText = "#let x = 1 + 2\n#x";
+    const source = new TextEncoder().encode(sourceText);
+    const session = new TypstianWasmSession();
+    try {
+      const compiled = session.compile(
+        JSON.stringify({
+          entry: "main.typ",
+          revision: 2,
+          clock: { nowMs: 0, localOffsetMinutes: 0 },
+        }),
+        (requestedPath) => requestedPath === "main.typ" ? source : undefined,
+        () => undefined,
+        () => undefined,
+      ) as { type?: unknown };
+      expect(compiled.type).toBe("compiled");
+
+      const tooltip = (session as TypstianWasmSession & {
+        tooltip(requestJson: string): string;
+      }).tooltip(JSON.stringify({
+        revision: 2,
+        source: "main.typ",
+        sourceText,
+        byteOffset: sourceText.length,
+        side: -1,
+      }));
+
+      expect(JSON.parse(tooltip)).toEqual({
+        type: "code",
+        revision: 2,
+        content: "3",
+      });
+
+      const changedSourceText = "#let x = 1 + 2\n#other";
+      const changed = (session as TypstianWasmSession & {
+        tooltip(requestJson: string): string;
+      }).tooltip(JSON.stringify({
+        revision: 2,
+        source: "main.typ",
+        sourceText: changedSourceText,
+        byteOffset: changedSourceText.length,
+        side: -1,
+      }));
+      expect(JSON.parse(changed)).toEqual({
+        type: "no-tooltip",
+        revision: 2,
+      });
+    } finally {
+      session.free();
+    }
+  });
+
   it("resolves datetime.today() to the host's own local date", { timeout: 30_000 }, async () => {
     const client = new TypstianCompilerClient({
       rootPath: fixtureRoot,
@@ -294,6 +352,34 @@ it("embeds a Korean glyph", { timeout: 30_000 }, async () => {
           path: "main.typ",
           byteOffset: sourceText.indexOf("local ="),
         },
+      });
+    } finally {
+      client.close();
+    }
+  }, 30_000);
+
+
+  it("answers a tooltip through the retained browser-worker client", async () => {
+    const rootPath = path.resolve("helper/tests/fixtures/definition");
+    const client = new TypstianCompilerClient({
+      rootPath,
+      wasmPath: path.resolve("helper/wasm/pkg/typstian_wasm_bg.wasm"),
+    });
+    try {
+      const compiled = await client.compile({ revision: 7, entryPath: "main.typ" });
+      expect(compiled.ok).toBe(true);
+      const sourceText = fs.readFileSync(path.join(rootPath, "main.typ"), "utf8");
+      const byteOffset = sourceText.lastIndexOf("local") + "local".length;
+
+      await expect(client.tooltip({
+        revision: 7,
+        source: "main.typ",
+        sourceText,
+        byteOffset,
+        side: -1,
+      })).resolves.toEqual({
+        revision: 7,
+        tooltip: { kind: "code", content: "1" },
       });
     } finally {
       client.close();

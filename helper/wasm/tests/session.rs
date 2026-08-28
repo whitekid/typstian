@@ -2,7 +2,7 @@ use base64::Engine;
 use typstian_wasm::protocol::{
     ClickRequest, ClickResponse, CompleteRequest, CompleteResponse, CompletionItem,
     DefinitionRequest, DefinitionResponse, ForwardRequest, ForwardResponse, PageDimensions,
-    RenderedPosition,
+    RenderedPosition, TooltipRequest, TooltipResponse,
 };
 use typstian_wasm::{Clock, CompileRequest, CompileResult, FileInput, Session};
 
@@ -410,6 +410,166 @@ fn definition_in(
         source_text: source_text.into(),
         byte_offset,
     })
+}
+
+
+fn tooltip_session(source: &str, revision: u64) -> Session {
+    let mut session = Session::new();
+    let compiled = session
+        .compile(CompileRequest {
+            clock: CLOCK,
+            entry: "main.typ".into(),
+            revision,
+            files: vec![file_input("main.typ", source.as_bytes())],
+            packages: Vec::new(),
+        })
+        .expect("tooltip fixture compiles");
+    assert_eq!(error_messages(&compiled), Vec::<&str>::new());
+    session
+}
+
+fn tooltip_in(
+    session: &Session,
+    revision: u64,
+    source_text: &str,
+    byte_offset: usize,
+    side: i8,
+) -> TooltipResponse {
+    session.tooltip(TooltipRequest {
+        revision,
+        source: "main.typ".into(),
+        source_text: source_text.into(),
+        byte_offset,
+        side,
+    })
+}
+
+#[test]
+fn preserves_prose_and_code_tooltips_from_the_retained_document() {
+    let source = "#let x = 1 + 2\n#x\n#figure(caption: [Hi])[]<f>\n@f";
+    let session = tooltip_session(source, 41);
+    let code_cursor = source.find("\n#x").unwrap() + 3;
+    let text_cursor = source.len();
+
+    assert_eq!(
+        tooltip_in(&session, 41, source, code_cursor, -1),
+        TooltipResponse::Code {
+            revision: 41,
+            content: "3".into(),
+        }
+    );
+    assert_eq!(
+        tooltip_in(&session, 41, source, text_cursor, -1),
+        TooltipResponse::Text {
+            revision: 41,
+            content: "Hi".into(),
+        }
+    );
+}
+
+#[test]
+fn selects_the_token_after_the_tooltip_cursor() {
+    let source = "#let x = 1 + 2\n#x";
+    let session = tooltip_session(source, 42);
+    let cursor = source.rfind('x').unwrap();
+
+    assert_eq!(
+        tooltip_in(&session, 42, source, cursor, 1),
+        TooltipResponse::Code {
+            revision: 42,
+            content: "3".into(),
+        }
+    );
+}
+
+#[test]
+fn offers_no_tooltip_when_the_hovered_token_changed_since_the_compile() {
+    let source = "#let old = 1\n#old";
+    let session = tooltip_session(source, 43);
+    let live = "#let old = 1\n#other";
+
+    assert_eq!(
+        tooltip_in(&session, 43, live, live.len(), -1),
+        TooltipResponse::NoTooltip { revision: 43 }
+    );
+}
+
+#[test]
+fn offers_no_tooltip_when_the_live_buffer_diverged_away_from_the_cursor() {
+    let source = "#let x = 1 + 2\n#x";
+    let session = tooltip_session(source, 44);
+    let live = format!("X{source}");
+
+    assert_eq!(
+        tooltip_in(&session, 44, &live, live.len(), -1),
+        TooltipResponse::NoTooltip { revision: 44 }
+    );
+}
+
+#[test]
+fn rejects_a_tooltip_without_a_retained_document() {
+    assert_eq!(
+        tooltip_in(&Session::new(), 45, "#x", 2, -1),
+        TooltipResponse::InvalidRequest { revision: 45 }
+    );
+}
+
+#[test]
+fn rejects_a_stale_tooltip_revision_without_recompiling() {
+    let source = "#let x = 1\n#x";
+    let session = tooltip_session(source, 46);
+
+    assert_eq!(
+        tooltip_in(&session, 45, source, source.len(), -1),
+        TooltipResponse::StaleRevision { expected: 46 }
+    );
+}
+
+#[test]
+fn rejects_an_invalid_tooltip_side() {
+    let source = "#let x = 1\n#x";
+    let session = tooltip_session(source, 47);
+
+    assert_eq!(
+        tooltip_in(&session, 47, source, source.len(), 0),
+        TooltipResponse::InvalidRequest { revision: 47 }
+    );
+}
+
+#[test]
+fn rejects_an_oversized_tooltip_source() {
+    let source = "#let x = 1\n#x";
+    let session = tooltip_session(source, 48);
+    let oversized = "x".repeat(2 * 1024 * 1024 + 1);
+
+    assert_eq!(
+        tooltip_in(&session, 48, &oversized, 0, 1),
+        TooltipResponse::InvalidRequest { revision: 48 }
+    );
+}
+
+#[test]
+fn rejects_a_tooltip_cursor_outside_a_utf8_boundary() {
+    let source = "#let x = 1\n#x";
+    let session = tooltip_session(source, 49);
+    let live = format!("한{source}");
+
+    assert_eq!(
+        tooltip_in(&session, 49, &live, 1, 1),
+        TooltipResponse::InvalidRequest { revision: 49 }
+    );
+}
+
+#[test]
+fn drops_tooltip_content_above_the_response_limit() {
+    let caption = "x".repeat(64 * 1024 + 1);
+    let source = format!("#figure(caption: [{caption}])[]<f>\n@f");
+    let session = tooltip_session(&source, 50);
+
+    assert_eq!(
+        tooltip_in(&session, 50, &source, source.len(), -1),
+        TooltipResponse::NoTooltip { revision: 50 }
+    );
 }
 
 #[test]

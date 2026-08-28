@@ -8,6 +8,8 @@ import {
   type CompilerCompleteResult,
   type CompilerDefinitionRequest,
   type CompilerDefinitionResult,
+  type CompilerTooltipRequest,
+  type CompilerTooltipResult,
   type CompilerForwardRequest,
   type CompilerForwardResult,
   type CompilerJumpRequest,
@@ -36,6 +38,7 @@ export interface TypstPreviewViewOptions {
   forward: (request: CompilerForwardRequest) => Promise<CompilerForwardResult>;
   complete: (request: CompilerCompleteRequest) => Promise<CompilerCompleteResult>;
   definition: (request: CompilerDefinitionRequest) => Promise<CompilerDefinitionResult>;
+  tooltip: (request: CompilerTooltipRequest) => Promise<CompilerTooltipResult>;
   onCompiled: (sourcePath: string, result: CompilerCompileResult) => void;
   onDiagnostic: (diagnostic: CompilerDiagnostic) => void;
   onSourceLocation: (
@@ -63,6 +66,7 @@ export class TypstPreviewView extends ItemView {
   private forwardAbort: AbortController | null = null;
   private completeAbort: AbortController | null = null;
   private definitionAbort: AbortController | null = null;
+  private tooltipAbort: AbortController | null = null;
   private activeRender: Promise<void> = Promise.resolve();
   constructor(leaf: WorkspaceLeaf, private readonly options: TypstPreviewViewOptions) {
     super(leaf);
@@ -263,6 +267,46 @@ export class TypstPreviewView extends ItemView {
     }
   }
 
+
+  async tooltip(
+    source: string,
+    sourceText: string,
+    byteOffset: number,
+    side: -1 | 1,
+    isCurrent: () => boolean = () => true,
+  ): Promise<CompilerTooltipResult["tooltip"]> {
+    const revision = this.activeRevision;
+    if (revision === null || this.state.sourcePath === null || !isCurrent()) return null;
+
+    const active = new AbortController();
+    this.tooltipAbort?.abort();
+    this.tooltipAbort = active;
+    try {
+      const result = await this.options.tooltip({
+        revision,
+        source,
+        sourceText,
+        byteOffset,
+        side,
+        signal: active.signal,
+      });
+      if (
+        active.signal.aborted
+        || this.tooltipAbort !== active
+        || result.revision !== revision
+        || this.activeRevision !== revision
+        || !isCurrent()
+      ) {
+        return null;
+      }
+      return result.tooltip;
+    } catch {
+      return null;
+    } finally {
+      if (this.tooltipAbort === active) this.tooltipAbort = null;
+    }
+  }
+
   restartBackend(): void {
     this.invalidateRevision();
     void Promise.resolve(this.options.restartBackend?.()).then(() => this.refresh());
@@ -429,6 +473,8 @@ export class TypstPreviewView extends ItemView {
     this.completeAbort = null;
     this.definitionAbort?.abort();
     this.definitionAbort = null;
+    this.tooltipAbort?.abort();
+    this.tooltipAbort = null;
   }
 
   /**
