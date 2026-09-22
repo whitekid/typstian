@@ -3,6 +3,7 @@ import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { builtinModules } from "node:module";
 import process from "node:process";
 import esbuild from "esbuild";
+import { pdfJsGlobalIsolationPlugin } from "./scripts/pdfjs-global-isolation.mjs";
 
 const production = process.argv[2] === "production";
 const external = [
@@ -72,6 +73,7 @@ const context = await esbuild.context({
   minify: production,
   outdir: ".",
   platform: "node",
+  plugins: [pdfJsGlobalIsolationPlugin()],
   sourcemap: production ? false : "inline",
   target: "es2021",
   treeShaking: true
