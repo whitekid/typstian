@@ -11,7 +11,7 @@
     "licenses:check": "node scripts/generate-third-party-notices.mjs --check",
     "verify:release-notices": "node scripts/verify-release-notices.mjs",
     "dev": "node esbuild.config.mjs",
-    "build": "npm run typecheck && node esbuild.config.mjs production && npm run verify:release-notices",
+    "build": "npm run typecheck && node esbuild.config.mjs production && npm run verify:release-notices && node tests/pdfjs-bundle-smoke.mjs",
     "lint": "eslint . --max-warnings 0",
     "release": "node scripts/release.mjs",
     "test": "vitest run",

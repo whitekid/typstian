@@ -1,84 +1,54 @@
-import { build } from "esbuild";
-import { Buffer } from "node:buffer";
-import { spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
+import Module, { createRequire } from "node:module";
+import { resolve } from "node:path";
 import process from "node:process";
 
-import { pdfJsGlobalIsolationPlugin } from "../scripts/pdfjs-global-isolation.mjs";
+const require = createRequire(import.meta.url);
+const artifact = resolve("main.js");
+const globals = ["pdfjsLib", "pdfjsWorker"];
+const original = globals.map((name) => Object.getOwnPropertyDescriptor(globalThis, name));
+const originalLoad = Module._load;
 
-const runtime = globalThis;
-let runtimeImportCount = 0;
+// Obsidian supplies this external module in the desktop app. Other imports
+// come from the installed dependencies, and PDF.js comes from main.js itself.
+class ObsidianClassStub {}
+const obsidian = new Proxy({}, { get: () => ObsidianClassStub });
 
-async function bundlePdfJs() {
-  const result = await build({
-    entryPoints: ["src/pdfjs-adapter.ts"],
-    bundle: true,
-    format: "esm",
-    platform: "node",
-    sourcemap: false,
-    write: false,
-    plugins: [pdfJsGlobalIsolationPlugin()],
-  });
-  const bundle = result.outputFiles[0]?.text;
-  if (bundle === undefined) throw new Error("PDF.js runtime bundle was not generated.");
-  return await import(
-    `data:text/javascript;base64,${Buffer.from(bundle).toString("base64")}#runtime-${++runtimeImportCount}`
-  );
+function loadArtifact() {
+  delete require.cache[artifact];
+  Module._load = function loadWithObsidian(id, parent, isMain) {
+    if (id === "obsidian") return obsidian;
+    return originalLoad.call(this, id, parent, isMain);
+  };
+  try {
+    assert.equal(typeof require(artifact).default, "function");
+  } finally {
+    Module._load = originalLoad;
+  }
 }
 
-async function smoke() {
-  await bundlePdfJs();
-  if (runtime.pdfjsLib !== undefined || runtime.pdfjsWorker !== undefined) {
-    throw new Error("Bundled PDF.js created a host global that was absent before import.");
+try {
+  for (const name of globals) delete globalThis[name];
+  loadArtifact();
+  for (const name of globals) {
+    assert.equal(Object.hasOwn(globalThis, name), false, `${name} was added to the host`);
   }
 
   const hostPdfjsLib = { owner: "Obsidian PDF viewer API" };
   const hostPdfjsWorker = { owner: "Obsidian PDF viewer worker" };
-  runtime.pdfjsLib = hostPdfjsLib;
-  runtime.pdfjsWorker = hostPdfjsWorker;
-  const { createPdfJsEngine } = await bundlePdfJs();
-  if (runtime.pdfjsLib !== hostPdfjsLib || runtime.pdfjsWorker !== hostPdfjsWorker) {
-    throw new Error("Bundled PDF.js replaced a host PDF.js global.");
-  }
+  globalThis.pdfjsLib = hostPdfjsLib;
+  globalThis.pdfjsWorker = hostPdfjsWorker;
+  loadArtifact();
+  assert.equal(globalThis.pdfjsLib, hostPdfjsLib, "pdfjsLib was replaced");
+  assert.equal(globalThis.pdfjsWorker, hostPdfjsWorker, "pdfjsWorker was replaced");
 
-  const compiled = spawnSync(
-    "typst",
-    ["compile", "--format", "pdf", "-", "-"],
-    {
-      input: "#set page(width: 120pt, height: 80pt, margin: 10pt)\nBundled PDF.js smoke",
-      maxBuffer: 2 * 1024 * 1024,
-    },
-  );
-  if (compiled.status !== 0) {
-    throw new Error("Typst could not create the PDF.js bundle smoke fixture.");
-  }
-
-  const loadingTask = createPdfJsEngine().load(new Uint8Array(compiled.stdout));
-  try {
-    const document = await loadingTask.promise;
-    if (document.numPages !== 1) throw new Error("Bundled PDF.js returned an unexpected page count.");
-    const page = await document.getPage(1);
-    const content = await page.getTextContent();
-    const text = content.items
-      .map((item) => item.str ?? "")
-      .join(" ")
-      .replace(/\s+/g, " ");
-    page.cleanup();
-    if (!text.includes("Bundled PDF.js smoke")) {
-      throw new Error(`Bundled PDF.js returned unexpected text: ${text}`);
-    }
-    if (runtime.pdfjsLib !== hostPdfjsLib || runtime.pdfjsWorker !== hostPdfjsWorker) {
-      throw new Error("PDF.js changed a host global while reading a PDF.");
-    }
-    process.stdout.write("Bundled PDF.js preserved host globals and loaded a Typst PDF with selectable text.\n");
-  } finally {
-    await loadingTask.destroy();
-  }
-  if (runtime.pdfjsLib !== hostPdfjsLib || runtime.pdfjsWorker !== hostPdfjsWorker) {
-    throw new Error("PDF.js changed a host global during cleanup.");
-  }
+  process.stdout.write("Production main.js preserved absent and existing host PDF.js globals.\n");
+} finally {
+  Module._load = originalLoad;
+  delete require.cache[artifact];
+  globals.forEach((name, index) => {
+    const descriptor = original[index];
+    if (descriptor === undefined) delete globalThis[name];
+    else Object.defineProperty(globalThis, name, descriptor);
+  });
 }
-
-void smoke().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});

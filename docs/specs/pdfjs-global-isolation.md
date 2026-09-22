@@ -18,10 +18,12 @@ publish `pdfjsLib` and `pdfjsWorker` on `globalThis`. The module's local exports
 and Typstian's explicit `WorkerMessageHandler.initializeFromPort` path remain.
 The build hook will match each exact assignment once and fail on drift.
 
-The regression test will build the adapter with that same hook, import each
-bundle as a fresh module, exercise a real Typst PDF, and check cleanup. It will
-verify that absent host globals stay absent and that existing host globals keep
-their identity and values.
+The production build will execute its generated `main.js` as a fresh CommonJS
+module with host globals absent and then present. The smoke test will verify that
+absent globals stay absent and that existing globals keep their identity. Its
+only host stub is Obsidian, which supplies that external module at runtime.
+The adapter test will load a real Typst PDF through the explicit worker and
+check resource cleanup.
 
 ## Coverage plan
 
@@ -30,3 +32,4 @@ their identity and values.
 | R1 | Issue #5 expected behavior | Production PDF.js bundle transform | Bundle import with globals absent and sentinel values | done |
 | R2 | Issue #5 expected behavior; ADR 0002 | Keep explicit `MessageChannel` worker support | Real Typst PDF text extraction and loading-task destroy smoke | done |
 | R3 | Issue #5 reproducibility | Exact-match build guard for both upstream assignments | Unit test against current PDF.js sources and drift cases | done |
+| R4 | Issue #7 production bundle gap | Generated `main.js` from `src/main.ts` in CommonJS format | Build smoke with both globals absent and with host sentinel values | done |

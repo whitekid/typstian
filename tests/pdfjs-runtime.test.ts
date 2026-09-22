@@ -105,7 +105,7 @@ describe("bundled PDF.js runtime", () => {
     expect(config).toContain("plugins: [pdfJsGlobalIsolationPlugin()]");
   });
 
-  it("leaves host globals absent when importing the production PDF.js bundle", async () => {
+  it("leaves host globals absent when importing the PDF.js adapter bundle", async () => {
     await withPdfJsGlobals(null, async () => {
       await loadBundledPdfJs();
       const runtime = globalThis as typeof globalThis & {
@@ -117,7 +117,7 @@ describe("bundled PDF.js runtime", () => {
     });
   });
 
-  it("preserves existing host globals when importing the production PDF.js bundle", async () => {
+  it("preserves existing host globals when importing the PDF.js adapter bundle", async () => {
     const hostPdfjsLib = { owner: "Obsidian PDF viewer API" };
     const hostPdfjsWorker = { owner: "Obsidian PDF viewer worker" };
     await withPdfJsGlobals({ pdfjsLib: hostPdfjsLib, pdfjsWorker: hostPdfjsWorker }, async () => {
