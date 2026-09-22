@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { statSync } from "node:fs";
 import Module, { createRequire } from "node:module";
 import { resolve } from "node:path";
 import process from "node:process";
 
 const require = createRequire(import.meta.url);
 const artifact = resolve("main.js");
+// The release bundle exists only after the build, not in a fresh checkout.
+assert.ok(statSync(artifact).size < 13_500_000, "main.js exceeds the 13.5 MB bundle budget");
 const globals = ["pdfjsLib", "pdfjsWorker"];
 const original = globals.map((name) => Object.getOwnPropertyDescriptor(globalThis, name));
 const originalLoad = Module._load;
